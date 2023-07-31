@@ -1,6 +1,12 @@
 import serial
 import time
 import numpy as np
+def Load_foil():
+    raw = open('Airfoils\e591_norm.dat','r').read()
+    formatted = [el.split(" ") for el in raw.split('\n')]
+    formatted  = [[float(num) for num in list(filter(lambda x:x!='',coord))]for coord in formatted]#list(map(float,self.formatted))
+    formatted = np.array(list(filter(lambda x:x!=[],formatted)))
+    return formatted
 def home():
     serial_port.write("G28\r\n".encode())
 def goto(pos):
@@ -23,10 +29,6 @@ def setBedTemperature(T):
 def setRelExtrusion():
     cmd = "M83\r\n"
     serial_port.write(cmd.encode())
-
-
-
-
 extrusion_factor = 0.03
 serial_port = serial.Serial('COM18',115200)
 time.sleep(2)
@@ -36,20 +38,26 @@ setNozzleTemperature(260)
 waittillready()
 setBedTemperature(60)
 waittillready()
+
+foil = np.array((Load_foil()*200)+[10,100])
+foil = np.hstack((foil, np.full_like(foil, 0.2)))
+print(foil)
+'''
 angles = np.linspace(-np.pi,np.pi,500)
 positions = []
 for angle in angles:
     #print(angle)
     y = 70*np.sin(angle)+100
-    x = 30*np.cos(angle)+100
+    x = 70*np.cos(angle)+100
     z = 0.2
     positions.append([x,y,z])
-positions = np.array(positions)
-goto(positions[0])
-for z in range(2,200,3):
-    for i in range(1,len(positions)-1):
-        current_pos = positions[i-1]
-        new_pos = positions[i]
+'''
+
+goto(foil[0])
+for z in range(2,100,3):
+    for i in range(1,len(foil)-1):
+        current_pos = foil[i-1]
+        new_pos = foil[i]
         diff = new_pos-current_pos
         extrusion_distance = np.hypot(diff[0],diff[1])*extrusion_factor
         print(new_pos[0],new_pos[1],new_pos[2],extrusion_distance)
@@ -57,5 +65,5 @@ for z in range(2,200,3):
         waittillready()
 
 
-goto([0,0,30])
+goto([0,220,30])
 serial_port.close()

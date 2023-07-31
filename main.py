@@ -4,7 +4,8 @@ generative design to allow for the rapid production of 3d printed airframes
 the aim of this is to allow for easier access to the hobby through the use of 3D printers
 without having to do extensive design work
 """
-
+import serial
+import time
 import numpy as np
 import xml.etree.ElementTree as ET
 import matplotlib.pyplot as plt
@@ -17,33 +18,95 @@ from tkinter import filedialog
 from shapely.geometry import Point, Polygon
 class Printer():
     def __init__(self):
-        extrusion_factor = 0.06
-        serial_port = serial.Serial('COM18',115200)
+        self.Dimensions = [250,250,250]#Dimensions in mm
+        self.Speed = 60#mm/min
+        self.Filament_Diamiter = 1.75#mm
+        self.Nozzle_Diamiter = 0.4#mm
+        self.Flow_Factor = ((self.Filament_Diamiter/2)**2)/((self.Nozzle_Diamiter)**2)
+        self.extrusion_factor = 0.04
+        self.bed_size = np.array([220,220,250])
+        self.serial_port = serial.Serial('COM18',115200)
         time.sleep(2)
-
-    def home():
-        serial_port.write("G28\r\n".encode())
-    def goto(pos):
-        command = "G0 X"+str(pos[0])+" Y"+str(pos[1])+" Z"+str(pos[2])+"\r\n"
-        serial_port.write(command.encode())#
-    def extrudeto(x,y,z,e):
-        command = "G1 E"+str(e)+" X"+str(x)+" Y"+str(y)+" Z"+str(z)+"\r\n"
-        serial_port.write(command.encode())
-
-    def waittillready():
+        self.Ready()
+    def prime(self):
+        self.cmds = ["G0 X2 Y2 Z0.2\r\n",
+                     "G1 E7.92 X2 Y200 Z0.2\r\n",
+                     "G1 E7.92 X2.1 Y2 Z0.2\r\n",
+                     "G0 X2 Y2 Z10\r\n"]
+        for cmd in self.cmds:
+            self.serial_port.write(cmd.encode())
+            self.waittillready()
+        time.sleep(3)
+    def home(self):
+        self.serial_port.write("G28\r\n".encode())
+    def retract(self):
+        self.cmd = ["G1 E-25\r\n"]
+        for cmd in self.cmds:
+            self.serial_port(cmd.encode())
+    def goto(self, pos):
+        print("Going to ", pos)
+        self.command = "G0 X"+str(pos[0])+" Y"+str(pos[1])+" Z"+str(pos[2])+"\r\n"
+        self.serial_port.write(self.command.encode())#
+        self.waittillready()
+    def extrudeto(self, x,y,z,e):
+        self.command = "G1 E"+str(e)+" X"+str(x)+" Y"+str(y)+" Z"+str(z)+"\r\n"
+        self.serial_port.write(self.command.encode())
+        self.waittillready()
+    def waittillready(self):
         while True:
-            if serial_port.read_until() == b'ok\n':
+            if self.serial_port.read_until() == b'ok\n':
                 break
-    def setNozzleTemperature(T):
-        cmd = "M109 S"+str(T)+"\r\n"
-        serial_port.write(cmd.encode())
-    def setBedTemperature(T):
-        cmd = "M190 S"+str(T)+"\r\n"
-        serial_port.write(cmd.encode())
-    def setRelExtrusion():
-        cmd = "M83\r\n"
-        serial_port.write(cmd.encode())
-
+    def setNozzleTemperature(self, T):
+        print("Extruder heating to "+str(T)+" degrees.")
+        self.cmd = "M109 S"+str(T)+"\r\n"
+        self.serial_port.write(self.cmd.encode())
+        self.waittillready()
+        print("Extruder heated.")
+    def setBedTemperature(self, T):
+        print("Bed heating to "+str(T)+" degrees.")
+        self.cmd = "M190 S"+str(T)+"\r\n"
+        self.serial_port.write(self.cmd.encode())
+        self.waittillready()
+        print("Bed heated.")
+    def setRelExtrusion(self):
+        self.cmd = "M83\r\n"
+        self.serial_port.write(self.cmd.encode())
+        self.waittillready()
+    def setRelMotion(self):
+        self.cmd = "G91\r\n"
+        self.serial_port.write(self.cmd.encode())
+        self.waittillready()
+    def setAbsMotion(self):
+        self.cmd = "G90\r\n"
+        self.serial_port.write(self.cmd.encode())
+        self.waittillready()
+        self.setRelExtrusion()
+    def disableStepper(self):
+        self.cmd = "M18\r\n"
+        self.serial_port.write(self.cmd.encode())
+        self.waittillready()
+    def Ready(self):
+        self.home()
+        self.setRelExtrusion()
+        self.setNozzleTemperature(260)
+        self.setBedTemperature(60)
+        self.prime()
+        self.waittillready()
+    def print(self, layers):
+        '''Input format'''
+        '''
+        [[Sets], [of], [Paths]<- layer 1
+         [Sets], [of], [Paths]]<- layer 2
+        '''
+        for layer in layers:#this is each vertical slice
+            for element in layer:#this is each contrinious line
+                self.goto(element[0])
+                for index in range(1, len(element)-1):#this is is each point in the line
+                    self.diff = [element[index][0]-element[index-1][0], element[index][1]-element[index-1][1]]
+                    self.extrusion_distance = round(np.hypot(self.diff[0],self.diff[1])*self.extrusion_factor,5)
+                    print(element[index][0],element[index][1],element[index][2],self.extrusion_distance)
+                    self.extrudeto(element[index][0],element[index][1],element[index][2],self.extrusion_distance)
+        self.home()
 class Tools():
     def find_chamber_point(self, point, foil_surface):#Kidna a pain this is a duplicate
         '''Find cartesian location of a point a percentage of a way along a foils chamber line using NLSR'''
@@ -141,23 +204,65 @@ class Lattice_Optimisation():
         #Points in polygon
         #point tirangularisation
 
-
 class Wing(Tools):
     '''Working'''
-    def __init__(self, surface_, y_, chord_, sweep_, dihedral_, twist_, spars_):
+    def __init__(self, surface_, y_, chord_, sweep_, dihedral_, twist_, Hole_sizes_, Hole_locations_, Hole_elongations_):
         Tools.__init__(self)
-        self.Sections = [Foil(surface_[i], chord_[i], twist_[i]) for i in range(len(chord_))]
-        self.Section_angles = [[sweep_[i], dihedral_[i], y_[i]] for i in range(len(chord_))] #Sweep angle, dihedral angle, and the distance from the plater where it happens
+        self.Sections = [Wing_section(np.array([surface_[i],surface_[i+1]]),
+                                      np.array([y_[i],y_[i+1]]),
+                                      np.array([chord_[i],chord_[i+1]]),
+                                      np.array([twist_[i],twist_[i+1]]),
+                                      sweep_,
+                                      dihedral_,
+                                      Hole_sizes_,
+                                      Hole_locations_,
+                                      Hole_elongations_) for i in range(0,len(chord_)-1)]
+        self.Sections = [Foil(surface_[i], chord_[i], twist_[i]) for i in range(1,len(chord_)-1)]
         self.y_array = y_
+
+        ## TODO: Make use of Spars_ fix the hole sizing, location and elongation
+
+
+
+    def get_wing(self):
+        '''Returns n, 2d arrays that descirbe the foil'''
+        
+        self.fig = plt.figure()
+        self.ax = plt.axes(projection='3d')
+        '''The wing layers are each interpolation point along the wing, the slicer essentialy lofts between each of these layers'''
+        self.wing_layers =  np.array([np.hstack((self.Sections[i].get_foil()+self.Linear_offsets[i],np.full((1000,1),self.y_array[i])))  for i in range(len(self.Sections))])
+        for layer in self.wing_layers:
+            self.xline = layer[:,0]
+            self.yline = layer[:,1]
+            self.zline = layer[:,2]
+            self.ax.plot3D(self.xline, self.yline, self.zline)
+        plt.show()
+        print(self.wing_layers)
+        #self.wing_layers = self.add_spars(self.wing_layers)
+
+class Wing_section():
+    def __init__(self, surfaces_, y_, chords_, twists_, sweep_, dihedral_, Hole_sizes_, Hole_locations_, Hole_elongations_):
+        self.Foils = [Foil(surface_[i], chords_[i], twist_[i]) for i in range(1,len(chords_)-1)]
+        self.y_array = y_
+        self.chords = chords_
         self.sweep_array = sweep_
         self.dihedral_array = dihedral_
-        self.twist_array = twist_
+        self.twist_array = twists_
         ## TODO: Make use of Spars_ fix the hole sizing, location and elongation
-        self.Hole_Sizes = [[10,10,5],[10,10,5],[10,10,5]]
-        self.Hole_Loctions = [[0.3,0.5,0.6],[0.3,0.5,0.6],[0.3,0.5,0.6]]
-    def curve_model(self,x, a, b, c, d):
-        '''Defines the model used during the curve fitting step'''
-        return (a*x**3)+(b*x**2)+(c*x)+d
+        self.Hole_Sizes = Hole_sizes_#[10,10,5]# main spar, cable way, torque spar
+        self.Hole_Elongation = Hole_elongations_#[1,2,1]
+        self.Hole_Loctions = Hole_locations_#[0.3,0.5,0.6]
+    def generate_hole(self, radius, elongaton):
+        return (np.array([[radius*np.sin(angle),radius*np.cos(angle)] for angle in np.linspace(-np.pi,np.pi,100)])*elongation)
+    def generate_spars(self, layers):
+        for self.layer_index in range(0, len(self.Foils)):
+            self.boundary = self.Foils[self.layer_index].get_foil()
+            self.layer_sweep = self.sweep_array[self.layer_index]
+            self.layer_dihedral = self.dihedral_array[self.layer_index]
+            self.hole_defomation_factor = [1+np.tan(self.layer_sweep),1+np.tan(self.layer_dihedral)]
+            self.Holes = [self.generate_hole(self.Hole_Sizes[self.index],self.hole_defomation_factor*np.array([self.Hole_Elongation,1])) for self.index in range(0,len(self.Hole_Sizes))]
+        self.locations = [[self.find_chamber_point(point, boundary),self.find_chamber_point(point, boundary) ]for point in self.Hole_Loctions for boundary in layers] #spar locations in each layer
+        print(self.locations)
     def find_chamber_point(self, point, foil_surface):#Kidna a pain this is a duplicate
         '''Find cartesian location of a point a percentage of a way along a foils chamber line using NLSR'''
         self.Coefficients, _ = curve_fit(self.curve_model, foil_surface[:,0], foil_surface[:,1], p0 = [1, 1, 1, 1]) #Computes the optimum Coefficients to fit the curve model to the foils points using NLSS
@@ -174,33 +279,22 @@ class Wing(Tools):
             i+=1
         self.chamber_point = [i/1000, self.curve_model(i/1000, self.a, self.b, self.c, self.d)]
         return self.chamber_point
+    def curve_model(self,x, a, b, c, d):
+        '''Defines the model used during the curve fitting step'''
+        return (a*x**3)+(b*x**2)+(c*x)+d
     def generate_offsets(self):
         '''Returns an array of n, 2d arrays that describes how each layer must change'''
         self.Linear_offsets = [[self.y_array[i]*np.sin(self.sweep_array[i]),self.y_array[i]*np.sin(self.dihedral_array[i])] for i in range(len(self.y_array))]
         self.Linear_offsets = [np.sum(self.Linear_offsets[0:i],axis=0) for i in range(1,len(self.Linear_offsets)+1)]
-    def generate_hole(self, radius, elongaton, centre):
-        pass
-    def add_spars(self, layers):
-        self.locations = []
-        for self.layer_index in range(0, len(layers)):
-            self.boundary = layers[self.layer_index]
-            for self.hole_index in range(0,len(self.Hole_Sizes)):
-                self.hole_size = self.Hole_Sizes[self.layer_index, self.hole_index]
-                self.hole_location = self.Hole_Loctions[self.layer_index, self.hole_index]
-                self.hole_warp = self.Hole_Elongation[self.layer_index, self.hole_index]
-                self.hole_defomation_factor = np.tan(self.Section_angles[self.layer_index,0:1])+1
+    def get_wing_section(self):
+        '''Generates 2 profiles that can be interpolated between'''
+        '''Hole Form'''
 
-                self.cart_position = self.find_chamber_point(self.hole_location, self.boundary)
-                self.hole = self.generate_hole()
-        self.locations = [[self.find_chamber_point(point, boundary),self.find_chamber_point(point, boundary) ]for point in self.Hole_Loctions for boundary in layers] #spar locations in each layer
-        print(self.locations)
-        return
-    def get_wing(self):
-        '''Returns n, 2d arrays that descirbe the foil'''
-        self.generate_offsets()
-        '''The wing layers are each interpolation point along the wing, the slicer essentialy lofts between each of these layers'''
-        self.wing_layers =  np.array([np.hstack((self.Sections[i].get_foil()+self.Linear_offsets[i],np.full((1000,1),self.y_array[i])))  for i in range(len(self.Sections))])
-        self.wing_layers = elf.add_spars(self.wing_layers)
+        '''Upper section'''
+
+
+        '''Lower Section'''
+
 class Foil(Tools):
     '''Working'''
     def __init__(self, points, chord, twist):
@@ -268,13 +362,7 @@ class Foil(Tools):
 
 
 
-class Printer():
-    def __init__(self):
-        self.Dimensions = []#Dimensions in mm
-        self.Speed = 60#mm
-        self.Filament_Diamiter = 1.75#mm
-        self.Nozzle_Diamiter = 0.4
-        self.Flow_Factor = ((self.Filament_Diamiter/2)**2)/((self.Nozzle_Diamiter)**2)
+
 class Slicer():
     def __init__(self):
         self.Layer_height = 0.001
@@ -313,12 +401,15 @@ class main():
         self.slicer = Slicer()
         '''Defines Wings'''
         self.test_wing = Wing([self.foil, self.foil, self.foil],
-                              [0.0, 0.2, 0.40], #y values,All array must have a leading 0 to set the reference for the bed profile
-                              [0.4, 0.2, 0.15],#Chord lengths in meters
+                              [0.0, 0.1, 0.20], #y values,All array must have a leading 0 to set the reference for the bed profile
+                              [0.2, 0.2, 0.15],#Chord lengths in meters
                               [0,1,0.05], #Sweep angles
                               [0,0.02,0.02], #dihedral angles
                               [0.1,0.2,0.3], #Twist angles
-                              [0.3,0.3,0.3]) #Spar locations
+                              [10,10,5], #Hole Size
+                              [0.3,0.3,0.3],#Hole locations
+                              [1,2,1]#Hole Elongation
+                              )
         '''Test of generating wing'''
     #    ax = plt.figure().add_subplot(projection='3d')
     #    for i in self.test_wing.get_wing():
