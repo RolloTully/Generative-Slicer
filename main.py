@@ -126,15 +126,13 @@ class Tools():
         return self.chamber_point
 
 class CFD():
-    """This is an implementation of the Lattice Boltzmann simulation"""
+    """This is wrapper for XFOIL"""
     '''
     this should hopefully output a list of forces on each eadge of the foil, or the force applied to each vertex on the surface
     '''
-    def __init__(self, Density_, Kinematic_Viscocity_, V_inf_, foil_):
-        self.Density = Density
-        self.mu = Kinematic_Viscocity
-        self.V_inf = V_inf_
-        self.foil = foil_
+    def Compute_Max_Loading(self):
+        pass
+
 
 class Material():
     def __init__(self, tensile_, shear_, tensile_strength_, shear_strength_):
@@ -174,10 +172,10 @@ class FEA_Solver():
 
 
 
-class Lattice_Optimisation():
+class TTO_Optimisation():
     def __init__(self):
         pass
-    def Generatre_points(self, boundaries, inclusion):
+    def Generatre_mesh(self, boundaries, inclusion):
         '''Generates 1000 points within the foils bounding box'''
         self.surface = boundaries[0]#selecting airfoil boundary
         self.x_min = np.min(self.surface[:,0])
@@ -212,12 +210,11 @@ class Wing(Tools):
                                       np.array([y_[i],y_[i+1]]),
                                       np.array([chord_[i],chord_[i+1]]),
                                       np.array([twist_[i],twist_[i+1]]),
-                                      sweep_,
-                                      dihedral_,
+                                      np.array([sweep_[i],sweep_[i+1]]),
+                                      np.array([dihedral_[i],dihedral_[i+1]]),
                                       Hole_sizes_,
                                       Hole_locations_,
                                       Hole_elongations_) for i in range(0,len(chord_)-1)]
-        self.Sections = [Foil(surface_[i], chord_[i], twist_[i]) for i in range(1,len(chord_)-1)]
         self.y_array = y_
 
         ## TODO: Make use of Spars_ fix the hole sizing, location and elongation
@@ -226,43 +223,61 @@ class Wing(Tools):
 
     def get_wing(self):
         '''Returns n, 2d arrays that descirbe the foil'''
-        
+
         self.fig = plt.figure()
         self.ax = plt.axes(projection='3d')
         '''The wing layers are each interpolation point along the wing, the slicer essentialy lofts between each of these layers'''
-        self.wing_layers =  np.array([np.hstack((self.Sections[i].get_foil()+self.Linear_offsets[i],np.full((1000,1),self.y_array[i])))  for i in range(len(self.Sections))])
-        for layer in self.wing_layers:
-            self.xline = layer[:,0]
-            self.yline = layer[:,1]
-            self.zline = layer[:,2]
-            self.ax.plot3D(self.xline, self.yline, self.zline)
-        plt.show()
-        print(self.wing_layers)
-        #self.wing_layers = self.add_spars(self.wing_layers)
+        for self.Section in self.Sections:
+            self.Section.get_wing_section()
+            #self.xline = layer[:,0]
+            #self.yline = layer[:,1]
+            #self.zline = layer[:,2]
+            #self.ax.plot3D(self.xline, self.yline, self.zline)
+        #plt.show()
+
 
 class Wing_section():
     def __init__(self, surfaces_, y_, chords_, twists_, sweep_, dihedral_, Hole_sizes_, Hole_locations_, Hole_elongations_):
-        self.Foils = [Foil(surface_[i], chords_[i], twist_[i]) for i in range(1,len(chords_)-1)]
+        #Foil(surfaces_[i], chords_[i], twists_[i])
+        self.Foils = np.array([Foil(surfaces_[i], chords_[i], twists_[i]) for i in range(1,len(chords_))])
         self.y_array = y_
         self.chords = chords_
         self.sweep_array = sweep_
         self.dihedral_array = dihedral_
         self.twist_array = twists_
         ## TODO: Make use of Spars_ fix the hole sizing, location and elongation
-        self.Hole_Sizes = Hole_sizes_#[10,10,5]# main spar, cable way, torque spar
-        self.Hole_Elongation = Hole_elongations_#[1,2,1]
-        self.Hole_Loctions = Hole_locations_#[0.3,0.5,0.6]
-    def generate_hole(self, radius, elongaton):
+        self.Hole_Sizes = np.array(Hole_sizes_)#[10,10,5]# main spar, cable way, torque spar
+        self.Hole_Elongation = np.array(Hole_elongations_)#[1,2,1]
+        self.Hole_Loctions = np.array(Hole_locations_)#[0.3,0.5,0.6]
+    def get_section_pressure_dat(self, section):
+        self.foil_data = find_pressure_coefficients(airfoil='temp_airfoil_file_Do_Not_Delete', Reynolds = 1e6, alpha=-5,NACA=True)
+        return array([self.foil_data["x"],self.foil_data["y"]])
+    def generate_hole(self, radius, elongation):
         return (np.array([[radius*np.sin(angle),radius*np.cos(angle)] for angle in np.linspace(-np.pi,np.pi,100)])*elongation)
-    def generate_spars(self, layers):
-        for self.layer_index in range(0, len(self.Foils)):
-            self.boundary = self.Foils[self.layer_index].get_foil()
-            self.layer_sweep = self.sweep_array[self.layer_index]
-            self.layer_dihedral = self.dihedral_array[self.layer_index]
-            self.hole_defomation_factor = [1+np.tan(self.layer_sweep),1+np.tan(self.layer_dihedral)]
-            self.Holes = [self.generate_hole(self.Hole_Sizes[self.index],self.hole_defomation_factor*np.array([self.Hole_Elongation,1])) for self.index in range(0,len(self.Hole_Sizes))]
-        self.locations = [[self.find_chamber_point(point, boundary),self.find_chamber_point(point, boundary) ]for point in self.Hole_Loctions for boundary in layers] #spar locations in each layer
-        print(self.locations)
+    def generate_spars(self):
+        self.layer_sweep = self.sweep_array[1]
+        self.layer_dihedral = self.dihedral_array[1]
+        self.hole_defomation_factor = np.array([1+np.tan(self.layer_sweep),1+np.tan(self.layer_dihedral)])
+        self.Holes = np.array([self.generate_hole(self.Hole_Sizes[self.index],self.hole_defomation_factor*self.Hole_Elongation[self.index]) for self.index in range(0,len(self.Hole_Sizes))])
+        #working to here
+        #[self.find_chamber_point(self.point, self.Foil.get_foil()) for self.point in self.Hole_Loctions]
+        '''Holes are the same shape and size but in different locations'''
+        print(self.chords)
+        self.locations = np.array([[self.find_chamber_point(self.point, self.Foils[self.Foil_index].get_foil())*self.chords[self.Foil_index] for self.point in self.Hole_Loctions] for self.Foil_index in range(len(self.Foils)+1)]) #normalised spar locations in each layer
+
+        self.Spars = []
+        for self.index in range(self.Holes.shape[0]):
+            self.offset_hole = np.array([self.point+self.locations[self.index] for self.point in self.Holes[self.index]])
+
+            self.Spars.append(self.offset_hole)
+        self.Spars = np.array(self.Spars)
+        #print(self.Spars)
+        for self.index in range(self.Spars.shape[0]):
+            plt.plot(self.Spars[self.index][:,0],self.Spars[self.index][:,1])
+        plt.show()
+
+
+
     def find_chamber_point(self, point, foil_surface):#Kidna a pain this is a duplicate
         '''Find cartesian location of a point a percentage of a way along a foils chamber line using NLSR'''
         self.Coefficients, _ = curve_fit(self.curve_model, foil_surface[:,0], foil_surface[:,1], p0 = [1, 1, 1, 1]) #Computes the optimum Coefficients to fit the curve model to the foils points using NLSS
@@ -289,7 +304,7 @@ class Wing_section():
     def get_wing_section(self):
         '''Generates 2 profiles that can be interpolated between'''
         '''Hole Form'''
-
+        self.Spars = self.generate_spars()
         '''Upper section'''
 
 
@@ -406,15 +421,16 @@ class main():
                               [0,1,0.05], #Sweep angles
                               [0,0.02,0.02], #dihedral angles
                               [0.1,0.2,0.3], #Twist angles
-                              [10,10,5], #Hole Size
+                              [0.010,0.010,0.005], #Hole Size
                               [0.3,0.3,0.3],#Hole locations
-                              [1,2,1]#Hole Elongation
+                              [[1,1],[2,1],[1,1]]#Hole Elongation, vertical then horizontal streatching
                               )
         '''Test of generating wing'''
     #    ax = plt.figure().add_subplot(projection='3d')
     #    for i in self.test_wing.get_wing():
     #        ax.plot(i[:,0],i[:,1],i[:,2])
         #plt.show()
+        #self.Wing = self.test_wing.get_wing()
         self.Wing = self.test_wing.get_wing()
 
 
@@ -427,6 +443,56 @@ class main():
         self.formatted  = [[float(self.num) for self.num in list(filter(lambda x:x!='',self.coord))]for self.coord in self.formatted]#list(map(float,self.formatted))
         self.formatted = np.array(list(filter(lambda x:x!=[],self.formatted)))
         return self.formatted
+
+    def gen_naca(self, foil_num): #genrates 4 digit naca air foils
+        self.foil_num = str(foil_num)
+        self.max_camber = int(self.foil_num[0])/100
+        self.max_camber_pos = int(self.foil_num[1])/10
+        self.thickness_ratio = int(self.foil_num[2:])/100
+        self.foil_surface = []
+        for x in range(100,0,-1):
+            self.pp = x/100
+            self.thickness = 5*self.thickness_ratio*(0.2969*sqrt(self.pp)-0.1260*self.pp-0.3516*self.pp**2+0.2843*self.pp**3-0.1015*self.pp**4)
+            if self.pp<=self.max_camber_pos:
+                if self.max_camber != 0:
+                    self.camber_offset = (self.max_camber/self.max_camber_pos**2)*(2*self.max_camber_pos*self.pp-self.pp**2)
+                    self.offset_theta = arctan((2*self.max_camber/self.max_camber_pos**2)*(self.max_camber_pos-self.pp))
+                else:
+                    self.camber_offset = 0
+                    self.offset_theta = 0
+            else:
+                if self.max_camber!=0:
+                    self.camber_offset = (self.max_camber/(1-self.max_camber_pos)**2)*((1-2*self.max_camber_pos)+2*self.max_camber_pos*self.pp-self.pp**2)
+                    self.offset_theta = arctan((2*self.max_camber/(1-self.max_camber_pos)**2)*(self.max_camber_pos-self.pp))
+                else:
+                    self.camber_offset = 0
+                    self.offset_theta = 0
+            self.x_a = self.pp - self.thickness*sin(self.offset_theta)
+            self.y_a = self.camber_offset+self.thickness*cos(self.offset_theta)
+            self.foil_surface.append([self.x_a,self.y_a])
+        for x in range(0,100,1):
+            self.pp = x/100
+            self.thickness = 5*self.thickness_ratio*(0.2969*sqrt(self.pp)-0.1260*self.pp-0.3516*self.pp**2+0.2843*self.pp**3-0.1015*self.pp**4)
+            if self.pp<=self.max_camber_pos:
+                if self.max_camber!=0:
+                    self.camber_offset = (self.max_camber/self.max_camber_pos**2)*(2*self.max_camber_pos*self.pp-self.pp**2)
+                    self.offset_theta = arctan((2*self.max_camber/self.max_camber_pos**2)*(self.max_camber_pos-self.pp))
+                else:
+                    self.camber_offset = 0
+                    self.offset_theta = 0
+            else:
+                if self.max_camber!=0:
+                    self.camber_offset = (self.max_camber/(1-self.max_camber_pos)**2)*((1-2*self.max_camber_pos)+2*self.max_camber_pos*self.pp-self.pp**2)
+                    self.offset_theta = arctan((2*self.max_camber/(1-self.max_camber_pos)**2)*(self.max_camber_pos-self.pp))
+                else:
+                    self.camber_offset = 0
+                    self.offset_theta = 0
+            self.x_a = self.pp+self.thickness*sin(self.offset_theta)
+            self.y_a = self.camber_offset-self.thickness*cos(self.offset_theta)
+            self.foil_surface.append([self.x_a,self.y_a])
+        self.foil_surface = array(self.foil_surface)
+        return self.foil_surface
+
     def Load_airframe_defintion(self):
         """XFLR5 Stores its aircraft definitions a as XML file"""
 
