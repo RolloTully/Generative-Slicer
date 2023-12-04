@@ -59,7 +59,6 @@ class Main():
     def convert_to_xfoil(self, foil):
         self.file = open("test_airfoil","w")
         for point in foil:
-            print(point)
             self.row = "    "+str(round(point[0],5))+"   "+str(round(point[1],5))+"\n"
             self.file.write(self.row)
         self.file.close
@@ -76,22 +75,23 @@ class Main():
         self.Foil = [self.Loading_series[0]["x"],self.Loading_series[0]["y"]]
 
     def mainloop(self):
-        self.Compute_Max_Loading()
+        #self.Compute_Max_Loading()
+        self.foil = self.generate_naca(2412)
+        self.convert_to_xfoil(self.foil)
+        self.alfa = -5
+        self.reynold = 1e6
+        self.foil_data = find_pressure_coefficients(airfoil="naca2412", Reynolds = self.reynold, alpha=self.alfa, NACA=True)
+        #print(find_coefficients(airfoil='naca2412',alpha=-5))
+        print(self.foil_data.keys())
+        #print(foil_data["x"])
+        #print(foil_data["y"])
+        #print("\nCp-----")
+        #print(len(foil_data["Cp"]))
+        #plt.plot(self.foil_data["x"],self.foil_data["Cp"])
+        #plt.plot(self.foil_data["x"][:80],self.foil_data["y"][:80])
+        #plt.plot(self.foil_data["x"][80:],self.foil_data["y"][80:])
+        #plt.show()
 
-            #self.foil = self.generate_naca(2412)
-            #self.convert_to_xfoil(self.foil)
-            #self.alfa = -5
-            #self.reynold = 1e6
-            #self.foil_data = find_pressure_coefficients(airfoil="naca9919", Reynolds = self.reynold, alpha=self.alfa, NACA=True)
-            #print(find_coefficients(airfoil='naca2412',alpha=-5))
-            #print(foil_data.keys())
-            #print(foil_data["x"])
-            #print(foil_data["y"])
-            #print("\nCp-----")
-            #print(len(foil_data["Cp"]))
-            #plt.plot(self.foil_data["x"],self.foil_data["Cp"])
-            #plt.plot(self.foil_data["x"][:80],self.foil_data["y"][:80])
-            #plt.plot(self.foil_data["x"][80:],self.foil_data["y"][80:])
-            #plt.show()
+
 if __name__ == "__main__":
     Main()
