@@ -94,7 +94,7 @@ class main():
         plt.show()
         for x_index in range(0,2):#int((x_max-x_min)/major_row_step)+1):
             for y_index in range(0,2):#int((y_max-y_min)/major_row_step)+1):
-                self.new_grid = self.elementry_grid+(np.array([major_row_step, major_row_step])*np.array([x_index, y_index]))+np.array([x_min, y_min])
+                self.new_grid = self.elementry_grid+(np.array([2*major_row_step*np.cos(60), 2*major_row_step*np.cos(60)])*np.array([x_index, y_index]))+np.array([x_min, y_min])
                 self.points  = np.concatenate((self.points,self.new_grid))
                 print(self.new_grid)
         plt.scatter(self.points[:,0], self.points[:,1])
@@ -125,7 +125,7 @@ class main():
         self.xv, self.yv = np.meshgrid(self.x_grid,self.y_grid) #Defines a grid that encompases the entire object
         self.mesh_points = np.stack((self.xv.flatten(),self.yv.flatten()),axis = 1)#converts the grid to a set of points
         self.mesh_points = np.concatenate((self.mesh_points, self.mesh_points+[(self.y_range/int(self.y_range/self.grid_resolution))/2,(self.x_range/int(self.x_range/self.grid_resolution))/2]),axis=0)#this overlays a second grid of points shifted by have a grid cell down and to the right, this forms a prepreating grid of triangles
-        #self.mesh_points = self.generate_isometric_triangular_grid(self.upper_x_boundary,self.lower_x_boundary,self.upper_y_boundary, self.lower_y_boundary)
+        self.mesh_points = self.generate_isometric_triangular_grid(self.upper_x_boundary,self.lower_x_boundary,self.upper_y_boundary, self.lower_y_boundary)
         if Verbose:
             plt.scatter(self.mesh_points[:,0],self.mesh_points[:,1])
             plt.gca().set_aspect('equal')
@@ -185,11 +185,13 @@ class main():
         else:
             self.filtered_connections = self.triangulation.edges
         '''this next step closes all the holes, each hole has a missng connection to close it, this step inserts this connection'''
+        '''
         if holes is not None:
             for i in range(0,len(holes)):
                 self.index_start = self.hole_node_indexes[i]
                 self.index_stop = self.hole_node_indexes[i+1]
                 self.filtered_connections = np.vstack((self.filtered_connections,[self.index_start+1,self.index_stop-1]))
+        '''
         self.fig = plt.figure()
         self.ax = self.fig.add_subplot(111)
         for connection in self.filtered_connections:
@@ -206,7 +208,11 @@ class main():
     def mainloop(self):
         self.naca2412 = self.gen_naca(2412)
         #self.naca2412 = self.resample(self.naca2412, 400)
-        self.Mesh_layer(self.naca2412*300,np.array([np.array([[ 100+20*np.cos(theta), 5+10*np.sin(theta)] for theta in np.linspace(0, 2*np.pi,100)])]))
-
+        '''
+        self.Mesh_layer(self.naca2412*300,np.array([
+                                                    np.array([[ 100+10*np.cos(theta), 5+10*np.sin(theta)] for theta in np.linspace(0, 2*np.pi,100)]),
+                                                    np.array([[ 200+5*np.cos(theta), 5+5*np.sin(theta)] for theta in np.linspace(0, 2*np.pi,100)])
+                                                    ]))
+        '''
 if __name__ == "__main__":
     main()
