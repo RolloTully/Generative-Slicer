@@ -4,12 +4,16 @@ import matplotlib.path as mpltPath
 import numpy as np
 from matplotlib.lines import Line2D
 from scipy.optimize import curve_fit
+import aeropy.xfoil_module as xf
 from scipy import interpolate
 import math
 import time
+import random
+import numba
+from tqdm import tqdm
 class main():
     def __init__(self):
-        self.grid_resolution = 5#mm
+        self.grid_resolution = 2#mm
         self.mainloop()
     def resample(self, surface_,  samples):
         '''resamples the foil at a higher density'''
@@ -44,8 +48,8 @@ class main():
         self.max_camber_pos = int(self.foil_num[1])/10
         self.thickness_ratio = int(self.foil_num[2:])/100
         self.foil_surface = []
-        for x in range(500,0,-1):
-            self.pp = x/500
+        for x in range(100,0,-1):
+            self.pp = x/100
             self.thickness = 5*self.thickness_ratio*(0.2969*np.sqrt(self.pp)-0.1260*self.pp-0.3516*self.pp**2+0.2843*self.pp**3-0.1015*self.pp**4)
             if self.pp<=self.max_camber_pos:
                 if self.max_camber != 0:
@@ -64,8 +68,8 @@ class main():
             self.x_a = self.pp - self.thickness*np.sin(self.offset_theta)
             self.y_a = self.camber_offset+self.thickness*np.cos(self.offset_theta)
             self.foil_surface.append([self.x_a,self.y_a])
-        for x in range(0,500,1):
-            self.pp = x/500
+        for x in range(0,100,1):
+            self.pp = x/100
             self.thickness = 5*self.thickness_ratio*(0.2969*np.sqrt(self.pp)-0.1260*self.pp-0.3516*self.pp**2+0.2843*self.pp**3-0.1015*self.pp**4)
             if self.pp<=self.max_camber_pos:
                 if self.max_camber!=0:
@@ -86,23 +90,15 @@ class main():
             self.foil_surface.append([self.x_a,self.y_a])
         self.foil_surface = np.array(self.foil_surface)
         return self.foil_surface
-    def generate_isometric_triangular_grid(self, x_max, x_min, y_max, y_min, major_row_step=5):#Fucked
-        self.points = np.empty((0,2))
-        self.elementry_grid = np.array([[0,0],
-                                        [(major_row_step/2)*np.sin(np.radians(30)),(major_row_step/2)*np.cos(np.radians(30))]])
-        plt.scatter(self.elementry_grid[:,0], self.elementry_grid[:,1])
-        plt.show()
-        for x_index in range(0,2):#int((x_max-x_min)/major_row_step)+1):
-            for y_index in range(0,2):#int((y_max-y_min)/major_row_step)+1):
-                self.new_grid = self.elementry_grid+(np.array([2*major_row_step*np.cos(60), 2*major_row_step*np.cos(60)])*np.array([x_index, y_index]))+np.array([x_min, y_min])
-                self.points  = np.concatenate((self.points,self.new_grid))
-                print(self.new_grid)
-        plt.scatter(self.points[:,0], self.points[:,1])
-        plt.grid()
-        plt.show()
-        return self.points
+    def generate_isometric_triangular_grid(self, x_max, x_min, y_max, y_min, major_row_step=5):#working and fast
+        self.grid_dimensions = np.array([self.grid_resolution, -2*self.grid_resolution*np.cos(60)])
+        self.x_rows = (x_max-x_min)/self.grid_dimensions[0]
+        self.y_rows = (y_max-y_min)/self.grid_dimensions[1]
+        self.grid_1 = np.array([[self.grid_dimensions[0]*x, self.grid_dimensions[1]*y] for x in range(int(self.x_rows)+1) for y in range(int(self.y_rows)+1)])
+        return np.concatenate((self.grid_1,self.grid_1+(self.grid_dimensions/2)))+np.array([x_min,y_min])
 
-    def Mesh_layer(self, bounding_polygon, holes = None, Verbose = True):
+    #@numba.jit(nopython = False) #this is literaly my crack
+    def Mesh_layer(self, bounding_polygon, holes = None, Verbose = False):
         '''Creates a convex Delaunay triangulation mesh'''
         '''
         Boundary Polygon
@@ -110,21 +106,24 @@ class main():
 
         holes
             a 3D array containing arrays of points that define the boundaries of the holes within the model
+
+        Bugs:
+        when more than one hole is present the shit breaks, probably due to something with the hole index ranges and when it think the holes start and end
+
+        Comments:
+        really slow, can probably be spead up, getting better iteration time is down to 0.6 seconds, which is still slow as hell but its better
+        it WORKS, IT WORKS, .... for convex bounding polygons
+
+        i would write more comments but i think this is actually just magic at this point
         '''
         if Verbose:
             plt.plot(bounding_polygon[:,0],bounding_polygon[:,1])
             plt.show()
+        '''these 4 lines are so slow, there is some fortran code you can compile to speed it up by reducing the number of function calls'''
         self.lower_x_boundary = np.min(bounding_polygon[:,0])#Finds the lower x limit of the boundary
         self.upper_x_boundary = np.max(bounding_polygon[:,0])#Finds the upper x limit of the boundary
         self.lower_y_boundary = np.min(bounding_polygon[:,1])#Finds the lower y limit of the boundary
         self.upper_y_boundary = np.max(bounding_polygon[:,1])#Finds the upper y limit of the boundary
-        self.x_range = self.upper_x_boundary-self.lower_x_boundary
-        self.y_range = self.upper_y_boundary-self.lower_y_boundary
-        self.x_grid = np.linspace(self.lower_x_boundary, self.upper_x_boundary, int(self.x_range/self.grid_resolution))
-        self.y_grid = np.linspace(self.lower_y_boundary, self.upper_y_boundary, int(self.y_range/self.grid_resolution))
-        self.xv, self.yv = np.meshgrid(self.x_grid,self.y_grid) #Defines a grid that encompases the entire object
-        self.mesh_points = np.stack((self.xv.flatten(),self.yv.flatten()),axis = 1)#converts the grid to a set of points
-        self.mesh_points = np.concatenate((self.mesh_points, self.mesh_points+[(self.y_range/int(self.y_range/self.grid_resolution))/2,(self.x_range/int(self.x_range/self.grid_resolution))/2]),axis=0)#this overlays a second grid of points shifted by have a grid cell down and to the right, this forms a prepreating grid of triangles
         self.mesh_points = self.generate_isometric_triangular_grid(self.upper_x_boundary,self.lower_x_boundary,self.upper_y_boundary, self.lower_y_boundary)
         if Verbose:
             plt.scatter(self.mesh_points[:,0],self.mesh_points[:,1])
@@ -148,6 +147,10 @@ class main():
             self.convex_points = self.contained_points
             #if no holes are given then you can just skip this step
         self.all_points = np.vstack((self.convex_points, bounding_polygon))#, holes[0]))#Concatinate all points for the triangularisation
+        self.convex_points_indecies = np.array([0,len(self.convex_points)-1])
+        self.bounding_polygon_indecies = np.array([self.convex_points_indecies[1]+1, self.convex_points_indecies[1]+len(bounding_polygon)])
+        print("Convex points indecies", self.convex_points_indecies)
+        print("bounding point indivices", self.bounding_polygon_indecies)
         if Verbose:
             plt.scatter(self.all_points[:,0],self.all_points[:,1])
             plt.gca().set_aspect('equal')
@@ -161,37 +164,57 @@ class main():
         '''We now need to filter the connections to make sure they dont cross over any holes'''
         '''this is when it becomes hell'''
         '''if a node that is contained within the holes wall has a connection that within the set of nodes within the wall of the hole but is not an immediate neighbour then this connection must be removed'''
+
         if holes is not None:# if holes exist
             '''this step gets us the starting index of each holes nodes'''
-            self.hole_node_indexes = np.array([len(hole) for hole in holes])
-            self.hole_node_indexes = np.cumsum(self.hole_node_indexes)+self.all_point_length
-            self.hole_node_indexes = np.concatenate((np.array([self.all_point_length]),self.hole_node_indexes))-1
-            self.connections = self.triangulation.edges
+            self.hole_node_indecies = np.array([[0,self.all_point_length-1]])
+            for hole in holes:
+                self.hole_end_index = len(hole)
+                self.hole_node_indecies = np.concatenate((self.hole_node_indecies,np.array([[self.hole_node_indecies[-1,1]+1,self.hole_node_indecies[-1,1]+self.hole_end_index]])))
+            self.hole_node_indecies = self.hole_node_indecies[1:]
+            if Verbose:
+                self.fig = plt.figure()
+                self.ax = self.fig.add_subplot(111)
+                for index in range(0, self.convex_points_indecies[1]+1):
+                    self.point = self.all_points[index]
+                    plt.scatter(self.point[0], self.point[1], 10, c = 'r')
+                    self.ax.annotate(index, (self.point[0], self.point[1]))
+                for index in range(self.bounding_polygon_indecies[0], self.bounding_polygon_indecies[1]+1):
+                    self.point = self.all_points[index]
+                    plt.scatter(self.point[0], self.point[1], 10, c = 'g')
+                    self.ax.annotate(index, (self.point[0], self.point[1]))
+
+                for hole_indicies in self.hole_node_indecies:
+                    for index in range(hole_indicies[0], hole_indicies[1]+1):
+                        self.point = self.all_points[index]
+                        plt.scatter(self.point[0], self.point[1], 10, c = 'b')
+                        self.ax.annotate(index, (self.point[0], self.point[1]))
+                plt.gca().set_aspect('equal')
+                plt.show()
+            self.connections = self.triangulation.edges.copy()
+            self.invalid_connections = np.empty((0,2), np.int32)
+            for hole_node_index in self.hole_node_indecies:
+                self.index_start = hole_node_index[0]
+                self.index_stop = hole_node_index[1]
+                for index in range(hole_node_index[0], hole_node_index[1]+1):
+                    '''find all connections associated with this node'''
+                    self.associated_connections = np.array([connection for connection in self.connections if index in connection])#this is a horror show of inefficiency
+                    '''we now test each conection'''
+                    self.intra_hole_connections = np.empty((0,2), np.int32)
+                    for connection in self.associated_connections:
+                        if ((self.index_start<=  connection[0] <= self.index_stop) and (self.index_start <=  connection[1] <= self.index_stop)):
+                            self.intra_hole_connections = np.vstack((self.intra_hole_connections, connection))
+
+                    for connection in self.intra_hole_connections:
+                        if not ((connection[0]+1 == connection[1] or connection[0]-1 == connection[1]) or ((connection[0] == self.index_start and connection[1]== self.index_stop) or (connection[1] == self.index_start and connection[0] == self.index_stop))):
+                            '''the nodes are not adjacent'''
+                            self.invalid_connections = np.vstack((self.invalid_connections, connection))
             self.filtered_connections = np.empty((0,2))
-            for hole_node_index in range(0,len(holes)):
-                self.index_start = self.hole_node_indexes[hole_node_index]
-                self.index_stop = self.hole_node_indexes[hole_node_index+1]
-                for connection in self.connections:
-                    if self.index_start<=  connection[0] <= self.index_stop and self.index_start <=  connection[1] <= self.index_stop:
-                        '''We have confirmed that the connection is entirly contained within the hole wall'''
-                        if (connection[0]+1 == connection[1] or connection[0]-1 == connection[1]) or ((connection[0] == self.index_start or connection[0]== self.index_stop) and (connection[1] == self.index_start or connection[1] == self.index_stop)):
-                            '''we have confirmed adjacencey'''
-                            '''therefore its a valid connection'''
-                            self.filtered_connections = np.vstack((self.filtered_connections, connection))
-                        else:
-                            pass
-                    else:
-                        self.filtered_connections = np.vstack((self.filtered_connections, connection))
+            for connection in self.triangulation.edges:
+                if not np.any(np.all(self.invalid_connections == connection,axis=1)):
+                    self.filtered_connections = np.vstack((self.filtered_connections, connection))
         else:
             self.filtered_connections = self.triangulation.edges
-        '''this next step closes all the holes, each hole has a missng connection to close it, this step inserts this connection'''
-        '''
-        if holes is not None:
-            for i in range(0,len(holes)):
-                self.index_start = self.hole_node_indexes[i]
-                self.index_stop = self.hole_node_indexes[i+1]
-                self.filtered_connections = np.vstack((self.filtered_connections,[self.index_start+1,self.index_stop-1]))
-        '''
         self.fig = plt.figure()
         self.ax = self.fig.add_subplot(111)
         for connection in self.filtered_connections:
@@ -204,15 +227,34 @@ class main():
         plt.gca().set_aspect('equal')
         plt.show()
 
+    def get_pressure_distribution(self,foil):
+        '''
+        oh my this is so stupid, that you have to do this is maddening and took me
+        so long to figure out i just when and wrote this function
+        and completly went around how your meant to do it
+        if i could re do my dissertation i would just fix this disaster by rewriting xfoil in python
+
+        dont touch anything or it will 100% break
+        '''
+        foil_name = "do_not_delete_this_or_everything_breaks"
+        output_file = open(foil_name,'w')
+        for line in foil:
+            output_file.write("     "+str(format(line[0],'.6f'))+"    "+str(format(line[1],'.6f'))+"\n")#
+        output_file.close()
+        Data = xf.find_pressure_coefficients(foil_name, 0., iteration=100, NACA=False)
+        return Data
+
         #return convex_points, bounding_polygon, holes
     def mainloop(self):
-        self.naca2412 = self.gen_naca(2412)
-        #self.naca2412 = self.resample(self.naca2412, 400)
-        '''
-        self.Mesh_layer(self.naca2412*300,np.array([
-                                                    np.array([[ 100+10*np.cos(theta), 5+10*np.sin(theta)] for theta in np.linspace(0, 2*np.pi,100)]),
-                                                    np.array([[ 200+5*np.cos(theta), 5+5*np.sin(theta)] for theta in np.linspace(0, 2*np.pi,100)])
-                                                    ]))
-        '''
+        self.start_time = time.time()
+        self.foil_number = 5412
+        self.foil = self.gen_naca(self.foil_number)
+        self.third_chord = self.find_chamber_point(0.5, self.foil)
+        self.three_quater_chord = self.find_chamber_point(0.8, self.foil)
+        print(self.third_chord)
+        self.Layer = self.Mesh_layer(self.foil*300,np.array([
+                                                            np.array([[ self.third_chord[0]*300+10*np.cos(theta), self.third_chord[1]*300+10*np.sin(theta)] for theta in np.linspace(0, 2*np.pi,20)])[:-1],
+                                                            np.array([[ self.three_quater_chord[0]*300+5*np.cos(theta), self.three_quater_chord[1]*300+5*np.sin(theta)] for theta in np.linspace(0, 2*np.pi,20)])[:-1]]))
+        print(time.time()-self.start_time)
 if __name__ == "__main__":
     main()
