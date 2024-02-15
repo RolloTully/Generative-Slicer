@@ -18,15 +18,22 @@ def calcB(Nd, Cn, dof):
 def solveLP(Nd, Cn, f, dof, st, sc, jc):
     l = [col[2] + jc for col in Cn]
     B = calcB(Nd, Cn, dof)
+    #print("B", np.array(f).shape)
+    #input()
     a = cvx.Variable(len(Cn))
+    print(a)
+
     obj = cvx.Minimize(np.transpose(l) * a)
     q, eqn, cons= [], [], [a>=0]
     for k, fk in enumerate(f):
         q.append(cvx.Variable(len(Cn)))
         eqn.append(B * q[k] == fk * dof)
+        print("fk", fk)
+        print( "dof", dof)
         cons.extend([eqn[k], q[k] >= -sc * a, q[k] <= st * a])
     prob = cvx.Problem(obj, cons)
-    vol = prob.solve()
+    vol = prob.solve(solver = cvx.MOSEK,mosek_params={"MSK_IPAR_INTPNT_BASIS":0})
+    print(vol)
     q = [np.array(qi.value).flatten() for qi in q]
     a = np.array(a.value).flatten()
     u = [-np.array(eqnk.dual_value).flatten() for eqnk in eqn]
@@ -75,8 +82,10 @@ def trussopt(width, height, st, sc, jc):
     dof, f, PML = np.ones((len(Nd),2)), [], []
     #Load and support conditions
     for i, nd in enumerate(Nd):
-        if nd[0] == 0: dof[i,:] = [0, 0]
-        f += [0, -1] if (nd == [width, 0]).all() else [0, 0]
+        if nd[0] == 10: dof[i,:] = [0, 0]
+        f += [0, -0.947357983947] if (nd == [width, 0]).all() else [0, 0]
+        f += [0, -2.947357983947] if (nd == [0, 0]).all() else [0, 0]
+        f += [0, -2.947357983947] if (nd == [0, height]).all() else [0, 0]
     #Create the ’ground structure’
     for i, j in itertools.combinations(range(len(Nd)), 2):
         dx, dy = abs(Nd[i][0] - Nd[j][0]), abs(Nd[i][1] - Nd[j][1])
@@ -87,7 +96,9 @@ def trussopt(width, height, st, sc, jc):
     PML, dof = np.array(PML), np.array(dof).flatten()
     print("PML")
     print(PML)
+    print(f)
     f = [f[i:i+len(Nd)*2] for i in range(0, len(f), len(Nd)*2)]
+    print(f)
     print('Nodes: %d Members: %d' % (len(Nd), len(PML)))
     for pm in [p for p in PML if p[2] <= 1.42]:
         pm[3] = True

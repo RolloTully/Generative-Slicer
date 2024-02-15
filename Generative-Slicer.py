@@ -22,90 +22,12 @@ import numpy as np
 import cvxpy as cvx
 import matplotlib.pyplot as plt
 from shapely.geometry import Point, LineString, Polygon
-class Optimisation():
-    def calcB(Nd, Cn, dof):
-        self.m, self.n1, self.n2 = len(Cn), Cn[:,0].astype(int), Cn[:,1].astype(int)
-        self.l, self.X, self.Y = Cn[:,2], Nd[self.n2,0]-Nd[self.n1,0], Nd[self.n2,1]-Nd[self.n1,1]
-        self.d0, self.d1, self.d2, self.d3 = dof[self.n1*2], dof[self.n1*2+1], dof[self.n2*2], dof[self.n2*2+1]
-        self.s = np.concatenate((-self.X/self.l * self.d0, -self.Y/self.l * self.d1, self.X/self.l * self.d2, self.Y/self.l * self.d3))
-        self.r = np.concatenate((self.n1*2, self.n1*2+1, self.n2*2, self.n2*2+1))
-        self.c = np.concatenate((np.arange(self.m), np.arange(self.m), np.arange(self.m), np.arange(self.m)))
-        return sparse.coo_matrix((self.s, (self.r, self.c)), shape = (len(Nd)*2, self.m))
-    #Solve linear programming problem
-    def solveLP(Nd, Cn, f, dof, st, sc, jc):
-        self.l = [col[2] + jc for col in Cn]
-        self.B = calcB(Nd, Cn, dof)
-        self.a = cvx.Variable(len(Cn))
-        self.obj = cvx.Minimize(np.transpose(self.l) * self.a)
-        self.q, self.eqn, self.cons= [], [], [self.a>=0]
-        for self.k, self.fk in enumerate(f):
-            self.q.append(cvx.Variable(len(Cn)))
-            self.eqn.append(self.B * self.q[k] == self.fk * dof)
-            self.cons.extend([self.eqn[k], self.q[k] >= -sc * self.a, self.q[k] <= st * self.a])
-        self.prob = cvx.Problem(self.obj, self.cons)
-        self.vol = prob.solve()
-        self.q = [np.array(self.qi.value).flatten() for self.qi in self.q]
-        self.a = np.array(self.a.value).flatten()
-        self.u = [-np.array(eqnk.dual_value).flatten() for self.eqnk in self.eqn]
-        return self.vol, self.a, self.q, self.u
-    #Check dual violation
-    def stopViolation(Nd, PML, dof, st, sc, u, jc):
-        self.lst = np.where(PML[:,3]==False)[0]
-        self.Cn = PML[self.lst]
-        self.l = Cn[:,2] + jc
-        self.B = calcB(Nd, self.Cn, dof).tocsc()
-        self.y = np.zeros(len(Cn))
-        for self.uk in u:
-            self.yk = np.multiply(self.B.transpose().dot(self.uk) / self.l, np.array([[st], [-sc]]))
-            self.y += np.amax(self.yk, axis=0)
-        self.vioCn = np.where(y>1.0001)[0]
-        self.vioSort = np.flipud(np.argsort(self.y[self.vioCn]))
-        self.num = ceil(min(len(self.vioSort), 0.05*max( [len(Cn)*0.05, len(self.vioSort)])))
-        for i in range(self.num):
-            PML[self.lst[self.vioCn[self.vioSort[i]]]][3] = True
-        return num == 0
-    def trussopt(self, Links, Nd, Boundary, Convex, Ground, Forces, st, sc, jc):
-        # [self.filtered_connections, self.all_points,
-        #print(self.hole_node_indecies)
-        #print(self.bounding_polygon_indecies)
-        #print(self.convex_points_indecies)
-        print(Boundary, Convex, Ground, Forces, st, sc, jc)
-        self.dof, self.f, self.PML = np.ones((len(Nd),2)), np.zeros((len(Nd),2)), []
-        '''Ground Constraints'''
-        for hole in Ground:
-            for index in range(hole[0], hole[1]):
-                self.dof[index,:] = [0, 0]
-        '''Loads constraints'''
-        for index in range(Boundary[0], Boundary[1]):
-            self.f[i,:] = Forces[index-Boundary[1]]
-        '''Ground Structure'''
 
-        for i, j in Links:#Parses over link start and end indecies
-            self.dx, self.dy = abs(Nd[i][0] - Nd[j][0]), abs(Nd[i][1] - Nd[j][1])
-            if gcd(int(self.dx), int(self.dy)) == 1 or jc != 0:
-                    self.seg = [] if convex else LineString([Nd[i], Nd[j]])
-                    if convex or poly.contains(self.seg) or poly.boundary.contains(self.seg):
-                        self.PML.append( [i, j, np.sqrt(self.dx**2 + self.dy**2), False] )
-        self.PML, self.dof = np.array(self.PML), np.array(self.dof).flatten()
-        self.f = [self.f[i:i+len(Nd)*2] for i in range(0, len(self.f), len(Nd)*2)]
-        print('Nodes: %d Members: %d' % (len(Nd), len(self.PML)))
-        for pm in [p for p in self.PML if p[2] <= 1.42]:
-            pm[3] = True
-        #Start the ’member adding’ loop
-        for itr in range(1, 100):
-            self.Cn = self.PML[self.PML[:,3] == True]
-            self.vol, self.a, self.q, self.u = solveLP(Nd, self.Cn, self.f, self.dof, st, sc, jc)
-            print("Itr: %d, vol: %f, mems: %d" % (itr, self.vol, len(self.Cn)))
-            plotTruss(Nd, Cn, a, q, max(a) * 1e-3, "Itr:" + str(itr))
-            if stopViolation(Nd, PML, dof, st, sc, u, jc): break
-        print("Volume: %f" % (vol))
-        plotTruss(Nd, Cn, a, q, max(a) * 1e-3, "Finished", False)
 
 class main():
     def __init__(self):
-        self.grid_resolution = 5#mm
-        self.Flow_Velocity = 10
-        self.optimisation = Optimisation()
+        self.grid_resolution = 10#mm
+        self.Flow_Velocity = 50
         self.mainloop()
     def resample(self, surface_,  samples):
         '''resamples the foil at a higher density'''
@@ -182,6 +104,7 @@ class main():
             self.foil_surface.append([self.x_a,self.y_a])
         self.foil_surface = np.array(self.foil_surface)
         return self.foil_surface
+
     def generate_isometric_triangular_grid(self, x_max, x_min, y_max, y_min, major_row_step=5):#working and fast
         self.grid_dimensions = np.array([self.grid_resolution, -2*self.grid_resolution*np.cos(60)])
         self.x_rows = (x_max-x_min)/self.grid_dimensions[0]
@@ -265,20 +188,20 @@ class main():
                 self.ax = self.fig.add_subplot(111)
                 for index in range(0, self.convex_points_indecies[1]+1):
                     self.point = self.all_points[index]
-                    plt.scatter(self.point[0], self.point[1], 10, c = 'r')
+                    #plt.scatter(self.point[0], self.point[1], 10, c = 'r')
                     #self.ax.annotate(index, (self.point[0], self.point[1]))
                 for index in range(self.bounding_polygon_indecies[0], self.bounding_polygon_indecies[1]+1):
                     self.point = self.all_points[index]
-                    plt.scatter(self.point[0], self.point[1], 10, c = 'g')
+                    #plt.scatter(self.point[0], self.point[1], 10, c = 'g')
                     #self.ax.annotate(index, (self.point[0], self.point[1]))
 
                 for hole_indicies in self.hole_node_indecies:
                     for index in range(hole_indicies[0], hole_indicies[1]+1):
                         self.point = self.all_points[index]
-                        plt.scatter(self.point[0], self.point[1], 10, c = 'b')
+                        #plt.scatter(self.point[0], self.point[1], 10, c = 'b')
                         #self.ax.annotate(index, (self.point[0], self.point[1]))
-                plt.gca().set_aspect('equal')
-                plt.show()
+                #plt.gca().set_aspect('equal')
+                #plt.show()
             self.connections = self.triangulation.edges.copy()
             self.invalid_connections = np.empty((0,2), np.int32)
             for hole_node_index in self.hole_node_indecies:
@@ -306,25 +229,27 @@ class main():
         self.connections = self.filtered_connections# Just tidies it up a bit.
 
         '''We must now do the same for the boundary of the airfoil becuase in the case that the airfoil is concave it will form external connections'''
-        self.invalid_connections = np.empty((0,2), np.int32)
-        for index in range(self.bounding_polygon_indecies[0], self.bounding_polygon_indecies[1]):
-            '''find all connections associated with this node'''
-            self.associated_connections = np.array([connection for connection in self.connections if index in connection])#this is a horror show of inefficiency
-            '''we now test each conection'''
-            self.intra_hole_connections = np.empty((0,2), np.int32)
-            for connection in self.associated_connections:
-                if ((self.bounding_polygon_indecies[0]<=  connection[0] <= self.bounding_polygon_indecies[1]) and (self.bounding_polygon_indecies[0] <=  connection[1] <= self.bounding_polygon_indecies[1])):
-                    self.intra_hole_connections = np.vstack((self.intra_hole_connections, connection))
-            for connection in self.intra_hole_connections:
-                if not ((connection[0]+1 == connection[1] or connection[0]-1 == connection[1]) or ((connection[0] == self.bounding_polygon_indecies[0] and connection[1]== self.bounding_polygon_indecies[1]) or (connection[1] == self.bounding_polygon_indecies[0] and connection[0] == self.bounding_polygon_indecies[1]))):
-                    '''the nodes are not adjacent'''
-                    self.invalid_connections = np.vstack((self.invalid_connections, connection))
-        self.filtered_connections = np.empty((0,2))
-        for connection in self.connections:
-            '''We Now parse over each connection, if they are on the list we do not append them to the final list of connections'''
-            if not np.any(np.all(self.invalid_connections == connection,axis=1)):
-                self.filtered_connections = np.vstack((self.filtered_connections, connection))
-        print(len(self.filtered_connections), " Connections")
+
+        #self.invalid_connections = np.empty((0,2), np.int32)
+        #for index in range(self.bounding_polygon_indecies[0], self.bounding_polygon_indecies[1]):
+        #    '''find all connections associated with this node'''
+        #    self.associated_connections = np.array([connection for connection in self.connections if index in connection])#this is a horror show of inefficiency
+        #    '''we now test each conection'''
+        #    self.intra_hole_connections = np.empty((0,2), np.int32)
+        #    for connection in self.associated_connections:
+        #        if ((self.bounding_polygon_indecies[0]<=  connection[0] <= self.bounding_polygon_indecies[1]) and (self.bounding_polygon_indecies[0] <=  connection[1] <= self.bounding_polygon_indecies[1])):
+        #            self.intra_hole_connections = np.vstack((self.intra_hole_connections, connection))
+        #    for connection in self.intra_hole_connections:
+        #        if not ((connection[0]+1 == connection[1] or connection[0]-1 == connection[1]) or ((connection[0] == self.bounding_polygon_indecies[0] and connection[1]== self.bounding_polygon_indecies[1]) or (connection[1] == self.bounding_polygon_indecies[0] and connection[0] == self.bounding_polygon_indecies[1]))):
+        #            '''the nodes are not adjacent'''
+        #            self.invalid_connections = np.vstack((self.invalid_connections, connection))
+        #self.filtered_connections = np.empty((0,2))
+        #for connection in self.connections:
+        #    '''We Now parse over each connection, if they are on the list we do not append them to the final list of connections'''
+        #    if not np.any(np.all(self.invalid_connections == connection,axis=1)):
+        #        self.filtered_connections = np.vstack((self.filtered_connections, connection))
+        #print(len(self.filtered_connections), " Connections")
+
         if Verbose:
             self.fig = plt.figure()
             self.ax = self.fig.add_subplot(111)
@@ -337,7 +262,8 @@ class main():
                 self.ax.add_line(self.line)
             plt.gca().set_aspect('equal')
             plt.show()
-        return [self.filtered_connections, self.all_points, self.bounding_polygon_indecies, self.convex_points_indecies, self.hole_node_indecies]
+        self.filtered_connections = self.filtered_connections.astype(int)
+        #return [self.filtered_connections, self.all_points, self.bounding_polygon_indecies, self.convex_points_indecies, self.hole_node_indecies]
 
     def get_pressure_distribution(self,foil):
         '''
@@ -353,86 +279,133 @@ class main():
         for line in foil:
             self.output_file.write("     "+str(format(line[0],'.6f'))+"    "+str(format(line[1],'.6f'))+"\n")#
         self.output_file.close()
-        self.Data = xf.find_pressure_coefficients(self.foil_name, 0., iteration=200, NACA=False)
+        self.Data = xf.find_pressure_coefficients(self.foil_name, 5.,Reynolds = 1e5, iteration=200, NACA=False)
         return self.Data
 
-        #return convex_points, bounding_polygon, holes
     def Generate_loading_data(self, foil, layer_thickness):
         self.loading_data = self.get_pressure_distribution(foil)
         self.x = np.asarray(self.loading_data['x'],np.float16)
         self.y = np.asarray(self.loading_data['y'],np.float16)
         self.cp = np.asarray(self.loading_data['Cp'],np.float16)
-        self.fig = plt.figure()
-        self.ax = self.fig.add_subplot(111)
-        self.ax.plot(self.x,self.cp)
-        plt.gca().set_aspect('equal')
-        plt.show()
-        print(self.cp)
-
         self.pts = np.asarray(np.column_stack((self.x,self.y)),dtype = np.float32)
         self.pt_dist = np.sqrt(np.sum(np.square(np.diff(self.pts, axis = 0)),axis=1))
         self.link_area = (self.pt_dist/1000)*layer_thickness
         self.dynamic_pressure = 0.5*1.225*self.Flow_Velocity**2
         self.link_Force = self.link_area*np.mean(np.asarray(self.cp, dtype = np.float32))*self.dynamic_pressure
         self.vector_link_Force = []
-        plt.plot(self.link_Force)
-        plt.show()
-        self.fig = plt.figure()
-        self.ax = self.fig.add_subplot(111)
         for i, pair in enumerate(np.diff(self.pts,axis=0)):
             print(pair[1], pair[0])
-            #input()
             self.theta = np.arctan2(pair[1], pair[0])+np.pi/2
-            #print(self.theta)
-            #if self.theta<0:
-            #    print("Case1")
-            #    self.theta += np.pi/2+((15*np.pi)/360)
-            #elif self.theta>0:
-            #    print("Case2")
-            #    self.theta -= np.pi/2+((15*np.pi)/360)
-            #print("Theta ", self.theta)
-            #print([self.link_Force[i]*np.sin(self.theta),self.link_Force[i]*np.cos(self.theta)])
-            self.vector_link_Force.append([self.cp[i]*np.cos(self.theta),self.cp[i]*np.sin(self.theta) ])
-            self.ax.scatter(i,self.theta+np.pi/2)
-            #self.vector_link_Force.append([5*np.sin(self.theta),5*np.cos(self.theta)])
-        #plt.gca().set_aspect('equal')
-        plt.grid()
-        plt.show()
+            self.vector_link_Force.append([self.cp[i]*np.cos(self.theta),self.cp[i]*np.sin(self.theta) ])#This is activly wrong
         self.vector_link_Force = np.array(self.vector_link_Force)
         self.node_loads = [self.vector_link_Force[0]]
         for i in range(1,len(self.link_Force)-1):
             self.node_loads.append((self.vector_link_Force[i])+(self.vector_link_Force[i+1]))
         self.node_loads.append(self.vector_link_Force[-1])
-        self.fig = plt.figure()
-        self.ax = self.fig.add_subplot(111)
-        self.ax.plot(self.pts[:,0],self.pts[:,1])
-        print(self.node_loads)
-        for i, point in enumerate(foil):
-            try:
-                print(i)
-                print((self.node_loads[i][0], self.node_loads[i][1]))
-                self.ax.arrow(self.x[i], self.y[i],self.node_loads[i][0],self.node_loads[i][1])
-                #self.ax.annotate("", xy=(point[0], point[1]), xytext=(point[0]+self.node_loads[i][1]*1000, point[1]+self.node_loads[i][0]*1000),arrowprops=dict(arrowstyle="->"))
-                self.ax.plot(self.x[i],self.y[i])
-            except IndexError:
-                pass
+        return self.node_loads
+
+    def Truss_Analysis(self):
+        self.NN = len(self.all_points)          #Number of nodes
+        self.NE = len(self.filtered_connections)           #Number of bars
+        self.DOF = 2                  #2D Truss
+        self.NDOF = self.DOF*self.NN            #Total number of degree of freedom
+        self.DOFCON = np.ones_like(self.all_points).astype(int)
+        self.Ur = []
+        self.Forces = np.zeros_like(self.all_points)
+        for index in range(self.bounding_polygon_indecies[0], self.bounding_polygon_indecies[1]+1):
+
+            plt.arrow(self.all_points[index,0],self.all_points[index,1],self.forces[index-self.bounding_polygon_indecies[1]][0]*10,self.forces[index-self.bounding_polygon_indecies[1]][1]*10)
+            self.Forces[index,:] =  self.forces[index-self.bounding_polygon_indecies[1]]/100
+        plt.title("Naca 2412 Surface Pressure Distribuion")
         plt.gca().set_aspect('equal')
         plt.show()
-        print(self.node_loads)
+        for indexs in self.hole_node_indecies:
+            for i in range(indexs[0], indexs[1]+1):
+                plt.scatter(self.all_points[i,0],self.all_points[i,1])
+                self.DOFCON[i,:] = 0
+                self.Ur.append(0)
+                self.Ur.append(0)
+        plt.gca().set_aspect('equal')
+        plt.show()
+        #Structural analysis
+        self.d = self.all_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
+        self.length = np.sqrt((self.d**2).sum(axis=1))
+        self.theta = self.d.T/self.length
+        self.a = np.concatenate((-self.theta.T,self.theta.T), axis=1)
+        self.Global_Stiffness = np.zeros([self.NDOF,self.NDOF])
+        '''Now parsing over each element to add the mto the global stiffness matrix'''
+        for index in range(self.NE):
+            self.aux  = 2*self.filtered_connections[index,:]
+            self.indecies = np.r_[self.aux[0]:self.aux[0]+2,self.aux[1]:self.aux[1]+2]
+            self.ES = np.dot(self.a[index][np.newaxis].T*self.E*self.A,self.a[index][np.newaxis])/self.length[index]
+            self.Global_Stiffness[np.ix_(self.indecies,self.indecies)] = self.Global_Stiffness[np.ix_(self.indecies,self.indecies)] + self.ES
+        self.freeDOF = self.DOFCON.flatten().nonzero()[0]
+        print(self.freeDOF)
+        #input()
+        self.supportDOF = (self.DOFCON.flatten() == 0).nonzero()[0]
+        self.Kff = self.Global_Stiffness[np.ix_(self.freeDOF,self.freeDOF)]
+        self.Kfr = self.Global_Stiffness[np.ix_(self.freeDOF,self.supportDOF)]
+        self.Krf = self.Kfr.T
+        self.Krr = self.Global_Stiffness[np.ix_(self.supportDOF,self.supportDOF)]
+        self.Pf = self.Forces.flatten()[self.freeDOF]
+        self.Uf = np.linalg.solve(self.Kff,self.Pf)
+        self.U = self.DOFCON.astype(float).flatten()
+        self.U[self.freeDOF] = self.Uf
+        self.U[self.supportDOF] = self.Ur
+        self.U = self.U.reshape(self.NN,self.DOF)
+        self.u = np.concatenate((self.U[self.filtered_connections[:,0]],self.U[self.filtered_connections[:,1]]),axis=1)
+        self.N = self.E*self.A/self.length[:]*(self.a[:]*self.u[:]).sum(axis=1)
+        self.R = (self.Krf[:]*self.Uf).sum(axis=1) + (self.Krr[:]*self.Ur).sum(axis=1)
+        print("U")
+        print(self.U)
+        self.Displacement_points = self.all_points+self.U*100000
 
+        plt.scatter(self.all_points[:,0],self.all_points[:,1], c= 'red')
+        plt.scatter(self.Displacement_points[:,0],self.Displacement_points[:,1],c='blue')
+        plt.title("Deformed Airfoil shape")
+        plt.gca().set_aspect('equal')
+        plt.show()
+        print(self.u)
+        print(self.R.shape)
+        #self.R = self.R.reshape(2,self.DOF)
+
+        self.fig = plt.figure()
+        self.ax = self.fig.add_subplot(111)
+        for connection in self.filtered_connections:
+            self.start_location  = self.Displacement_points[int(connection[0])]
+            self.end_location  = self.Displacement_points[int(connection[1])]
+            self.ax.plot(self.start_location[0],self.start_location[1])
+            self.ax.plot(self.end_location[0],self.end_location[1])
+            self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]],c = 'blue')
+            self.ax.add_line(self.line)
+        for connection in self.filtered_connections:
+            self.start_location  = self.all_points[int(connection[0])]
+            self.end_location  = self.all_points[int(connection[1])]
+            self.ax.plot(self.start_location[0],self.start_location[1])
+            self.ax.plot(self.end_location[0],self.end_location[1])
+            self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]], c='red')
+            self.ax.add_line(self.line)
+        plt.gca().set_aspect('equal')
+        plt.show()
 
 
     def mainloop(self):
+        self.E = 4.107e9
+        self.A = 4e-4
         self.start_time = time.time()
-        self.foil_number = '9918'
+        self.foil_number = '2412'
         self.foil = self.gen_naca(self.foil_number)
         self.third_chord = self.find_chamber_point(0.3, self.foil)
         self.three_quater_chord = self.find_chamber_point(0.6, self.foil)
         self.Layer = self.Mesh_layer(self.foil*300,np.array([
                                                             np.array([[ self.third_chord[0]*300+10*np.cos(theta), self.third_chord[1]*300+10*np.sin(theta)] for theta in np.linspace(0, 2*np.pi,20)])[:-1],
                                                             np.array([[ self.three_quater_chord[0]*300+5*np.cos(theta), self.three_quater_chord[1]*300+5*np.sin(theta)] for theta in np.linspace(0, 2*np.pi,20)])[:-1]]))
+        print(self.filtered_connections)
+        self.all_points = self.all_points
         self.forces = self.Generate_loading_data(self.foil, 0.2)
-        #self.optimisation.trussopt(self.filtered_connections, self.all_points, self.bounding_polygon_indecies, self.convex_points_indecies, self.hole_node_indecies, self.forces, st = 1, sc =1, jc = 1)
+        self.Truss_Analysis()
+
+        #self.optimisation.trussopt(self.filtered_connections, self.all_points, self.bounding_polygon_indecies, self.convex_points_indecies, self.hole_node_indecies, self.forces, st = 1, sc =1, jc = 0)
 
         print(time.time()-self.start_time)
 if __name__ == "__main__":
