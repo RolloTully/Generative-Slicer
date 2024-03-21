@@ -3,7 +3,7 @@ what why how
 is half
 a section on prelim results
 
-3 key results
+3 key resultsf
 '''
 import matplotlib.pyplot as plt
 import matplotlib.tri as tri
@@ -24,10 +24,11 @@ import matplotlib.pyplot as plt
 from shapely.geometry import Point, LineString, Polygon
 from tqdm import tqdm
 from numba import jit
+import cProfile
 
 class main():
     def __init__(self):
-        self.grid_resolution = 10#mm
+        self.grid_resolution = 6#mm
         self.Flow_Velocity = 20
         self.Angle_of_Attack = 5
         self.foil_number = '2412'
@@ -119,8 +120,8 @@ class main():
         self.grid_1 = np.array([[self.grid_dimensions[0]*x, self.grid_dimensions[1]*y] for x in range(int(self.x_rows)+1) for y in range(int(self.y_rows)+1)])
         return np.concatenate((self.grid_1,self.grid_1+(self.grid_dimensions/2)))+np.array([x_min,y_min])
 
-    #@numba.jit(nopython = False) #this is literaly my crack
-    def Mesh_layer(self, bounding_polygon, holes = None, Verbose = False):
+
+    def Mesh_layer(self, bounding_polygon, holes = None, Verbose = False, angle = 0):
         '''Creates a convex Delaunay triangulation mesh'''
         '''
         Boundary Polygon
@@ -142,7 +143,17 @@ class main():
         self.upper_x_boundary = np.max(bounding_polygon[:,0])#Finds the upper x limit of the boundary
         self.lower_y_boundary = np.min(bounding_polygon[:,1])#Finds the lower y limit of the boundary
         self.upper_y_boundary = np.max(bounding_polygon[:,1])#Finds the upper y limit of the boundary
-        self.mesh_points = self.generate_isometric_triangular_grid(self.upper_x_boundary,self.lower_x_boundary,self.upper_y_boundary, self.lower_y_boundary)
+        self.mid_x = (self.upper_x_boundary-self.lower_x_boundary)/2
+        self.mid_y = (self.upper_y_boundary-self.lower_y_boundary)/2
+        self.x_range = self.upper_x_boundary-self.lower_x_boundary
+        self.y_range = self.upper_y_boundary-self.lower_y_boundary
+        self.range = max([self.x_range, self.y_range])
+        self.mid_point = np.array([self.mid_x, self.mid_y])
+        self.mesh_points = self.generate_isometric_triangular_grid(self.mid_x+self.range,self.mid_x-self.range,self.mid_y+self.range,self.mid_y-self.range)
+
+
+        #self.mesh_points = np.array([self.mid_point+np.dot((point - self.mid_point),np.array([[np.cos(angle), np.sin(angle)],[-np.sin(angle),np.cos(angle)]])) for point in self.mesh_points ])
+
         if Verbose:
             plt.scatter(self.mesh_points[:,0],self.mesh_points[:,1])
             plt.gca().set_aspect('equal')
@@ -292,17 +303,17 @@ class main():
 
     def Generate_loading_data(self, foil, layer_thickness):
         self.loading_data = self.get_pressure_distribution(foil)
-        self.x = np.asarray(self.loading_data['x'],np.float16)
-        self.y = np.asarray(self.loading_data['y'],np.float16)
-        self.cp = np.asarray(self.loading_data['Cp'],np.float16)
-        self.pts = np.asarray(np.column_stack((self.x,self.y)),dtype = np.float32)
+        self.x = np.asarray(self.loading_data['x'],np.float64)
+        self.y = np.asarray(self.loading_data['y'],np.float64)
+        self.cp = np.asarray(self.loading_data['Cp'],np.float64)
+        self.pts = np.asarray(np.column_stack((self.x,self.y)),dtype = np.float64)
         self.pt_dist = np.sqrt(np.sum(np.square(np.diff(self.pts, axis = 0)),axis=1))
         self.link_area = (self.pt_dist/1000)*layer_thickness
         self.dynamic_pressure = 0.5*1.225*self.Flow_Velocity**2
-        self.link_Force = self.link_area*np.mean(np.asarray(self.cp, dtype = np.float32))*self.dynamic_pressure
+        self.link_Force = self.link_area*np.mean(np.asarray(self.cp, dtype = np.float64))*self.dynamic_pressure
         self.vector_link_Force = []
         for i, pair in enumerate(np.diff(self.pts,axis=0)):
-            print(pair[1], pair[0])
+            #print(pair[1], pair[0])
             self.theta = np.arctan2(pair[1], pair[0])+np.pi/2
             self.vector_link_Force.append([self.cp[i]*np.cos(self.theta),self.cp[i]*np.sin(self.theta) ])#This is activly wrong
         self.vector_link_Force = np.array(self.vector_link_Force)
@@ -330,39 +341,29 @@ class main():
         self.d = self.all_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
         self.length = np.sqrt((np.square(self.d)).sum(axis=1))
         self.theta = self.d.T/self.length
-        print(self.theta)
         self.a = np.concatenate((-self.theta.T,self.theta.T), axis=1)
-        print("A:\n ", self.a)
-
         self.Global_Stiffness = np.zeros([self.NDOF,self.NDOF])
         '''Now parsing over each element to add the mto the global stiffness matrix'''
         for index in range(self.NE):
             self.aux  = 2*self.filtered_connections[index,:]
-            print(self.aux)
             self.indecies = np.r_[self.aux[0]:self.aux[0]+2,self.aux[1]:self.aux[1]+2]
             self.ES = np.dot(self.a[index][np.newaxis].T*self.E*self.A,self.a[index][np.newaxis])/self.length[index]
-            print("ES:\n", self.ES)
-            input()
             self.Global_Stiffness[np.ix_(self.indecies,self.indecies)] = self.Global_Stiffness[np.ix_(self.indecies,self.indecies)] + self.ES
         self.freeDOF = self.DOFCON.flatten().nonzero()[0]
         self.supportDOF = (self.DOFCON.flatten() == 0).nonzero()[0]
         self.Kff = self.Global_Stiffness[np.ix_(self.freeDOF,self.freeDOF)]
-        #self.Kfr = self.Global_Stiffness[np.ix_(self.freeDOF,self.supportDOF)]
-        #self.Krf = self.Kfr.T
-        #self.Krr = self.Global_Stiffness[np.ix_(self.supportDOF,self.supportDOF)]
         self.Pf = self.Forces.flatten()[self.freeDOF]
         self.Uf = np.linalg.solve(self.Kff,self.Pf)
         self.U = self.DOFCON.astype(float).flatten()
         self.U[self.freeDOF] = self.Uf
         self.U[self.supportDOF] = self.Ur
         self.U = self.U.reshape(self.NN,self.DOF)
-        self.u = np.concatenate((self.U[self.filtered_connections[:,0]],self.U[self.filtered_connections[:,1]]),axis=1)
         self.Displacement_points = self.all_points+self.U
         self.new_d = self.Displacement_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
         self.new_length = np.sqrt((self.new_d**2).sum(axis=1))
         self.d_length = self.length-self.new_length
 
-    def Optimise(self, verbose = False):
+    def Optimise(self, verbose = True):
         '''Not all members can be removed, we must find the array of memebers that we can remove with out the k-matrix becoming singular'''
         '''Weve now found this array, we can now go throught this list and find which of there contained members carries the least stress'''
         self.current_connections = self.filtered_connections
@@ -372,18 +373,45 @@ class main():
         self.Peak_displacment = []
         self.memberlengths = self.all_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
         self.original_total_length = np.sum(np.sqrt((self.memberlengths**2).sum(axis=1)))
-        self.NN = len(self.all_points)          #Number of nodes
-        self.NDOF = self.DOF*self.NN            #Total number of degree of freedom
-        #self.hole_ranges
+        self.frame_number = 0
+        self.working_lattice = self.filtered_connections.copy()
         while not self.halt:
+            self.frame_number +=1
             '''we must check that there arent any 'deadlegs' in the lattice, these cause large displacments that trips the stopping condition without contributing to its strength'''
-            self.memberlengths = self.all_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
+            self.Truss_Analysis(False)
+
+
+            '''Making a video of the optimisation'''
+            self.Strain = self.displaced_s_length-self.original_s_length
+            self.min_strain = np.min(self.Strain)
+            self.max_strain = np.max(self.Strain)
+            self.strain_range = self.max_strain-self.min_strain
+
+            self.fig = plt.figure()
+            self.ax = self.fig.add_subplot(111)
+            self.Displacement_points = self.all_points+self.U
+            for i, connection in enumerate(self.working_lattice):
+                self.index_strain = self.Strain[i]
+                self.colour_encoding = (self.index_strain-self.min_strain)/self.strain_range
+                self.colour = self.cmap(self.colour_encoding)
+                self.start_location  = self.Displacement_points[int(connection[0])]
+                self.end_location  = self.Displacement_points[int(connection[1])]
+                self.ax.plot(self.start_location[0],self.start_location[1])
+                self.ax.plot(self.end_location[0],self.end_location[1])
+                self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]],c = self.colour)
+                self.ax.add_line(self.line)
+            plt.title("Deformed Airfoil shape(x1000), NACA 2412, 5 Degrees, 20 ms^-1")
+            plt.gca().set_aspect('equal')
+            plt.savefig('C:\\Users\\rollo\\Documents\\GitHub\\Generative-Slicer\\Optimisation video\\'+str(self.frame_number)+'.png', dpi = 200)
+
+
+
+
+            self.memberlengths = self.all_points[self.working_lattice[:,1],:] - self.all_points[self.working_lattice[:,0],:]
             self.total_length = np.sum(np.sqrt((self.memberlengths**2).sum(axis=1)))
             self.Structure_Mass.append(self.total_length/self.original_total_length)
-            print("Total length ", self.total_length)
-            self.connection_copy = self.current_connections.copy()
             self.valid_changes = []
-            for connection in self.current_connections:
+            for connection in self.working_lattice:
                 self.valid = True
                 if not (connection[0] or connection[1]) in range(self.bounding_polygon_indecies[0],self.bounding_polygon_indecies[1]+1):
                     for hole in self.hole_node_indecies:
@@ -395,42 +423,56 @@ class main():
                     self.valid = False
                 if self.valid:
                     self.valid_changes.append(connection)
+
+            if self.valid_changes == []:
+                self.output_lattice = self.working_lattice
+                break
+
             self.costs = []
             self.indexes = []
             for valid_change in self.valid_changes:
                 self.indexes.append(np.where(np.all(self.current_connections == valid_change, axis=1))[0])
-            self.breaking = False
+            print("We here")
             for self.index in tqdm(self.indexes):
                 try:
-                    self.filtered_connections = np.delete(self.current_connections, self.index,0)
+                    self.filtered_connections = np.delete(self.working_lattice, self.index,0)
                     self.Truss_Analysis(False)
-                    if (np.max(np.abs(self.d_length))<5):
-                        self.costs.append(np.max(np.abs(self.d_length)))
-                    else:
-                        self.costs.append(1e9)
+                    self.costs.append(np.max(np.abs(self.d_length)))
                 except:
                     self.costs.append(1e9)
                     pass
                 #print("Removing member ", self.index," this is ",self.current_connections[self.index]," this has a cost of ",np.sum(self.d_length))
-
-            self.index_min_cost = np.argmin(np.abs(self.costs))
+            self.index_min_cost = np.argmin(self.costs)
+            print(self.costs)
             self.cost = self.costs[self.index_min_cost]
+            print("minimum cost index: ", self.index_min_cost, " Cost: ", self.cost)
             if np.max(np.abs(self.d_length)) >5:
-                self.filtered_connections = self.connection_copy
-                self.current_connections = self.connection_copy
+                self.output_lattice = self.working_lattice
                 self.halt = True
             else:
-                self.current_connections = np.delete(self.current_connections, self.indexes[self.index_min_cost],0)
+                self.working_lattice = np.delete(self.working_lattice, self.indexes[self.index_min_cost],0)
                 self.valid_changes = np.array(self.valid_changes)
                 self.Structure_total_displacment.append(np.sum(np.abs(self.d_length)))
                 self.Peak_displacment.append(np.max(np.abs(self.d_length)))
-
-
+            '''Floppy Member removal'''
+            print("and We here")
+            #self.points, self.counts = np.unique(self.current_connections.flatten(), return_counts=True)
+            #print(np.count_nonzero(self.counts==1))
+            #while 1 in self.counts:
+            #    self.points, self.counts = np.unique(self.current_connections.flatten(), return_counts=True)
+            #    print(self.counts)
+            #    self.extranious_memeber_end = self.points[np.argmin(self.counts)]
+            #    print("Member end ", self.extranious_memeber_end)
+            #    '''We must now remove any memebrs containing this point'''
+            #    self.members_to_remove = np.where(self.current_connections == self.extranious_memeber_end)
+            #    print("member index ", self.members_to_remove)
+            #    print("Member ", self.current_connections[self.members_to_remove[0]])
+            #    self.current_connections = np.delete(self.current_connections, self.members_to_remove[0],0)
 
 
 
             '''Live Plotting'''
-            if verbose:
+            if True:
                 '''Process Logging'''
                 print("____________________________________________________________________________________")
                 print(len(self.valid_changes), "Valid changes can be made.")
@@ -440,7 +482,7 @@ class main():
                 print("The Current maximum deformation is ", np.max(np.abs(self.d_length)))
                 self.fig = plt.figure()
                 self.ax = self.fig.add_subplot(111)
-                for connection in self.current_connections:
+                for connection in self.working_lattice:
                     self.start_location  = self.all_points[int(connection[0])]
                     self.end_location  = self.all_points[int(connection[1])]
                     self.ax.plot(self.start_location[0],self.start_location[1])
@@ -465,18 +507,7 @@ class main():
                 plt.show(block=False)
                 plt.pause(0.5)
                 plt.close()
-        self.points, self.counts = np.unique(self.current_connections.flatten(), return_counts=True)
-        print(np.count_nonzero(self.counts==1))
-        while 1 in self.counts:
-            self.points, self.counts = np.unique(self.current_connections.flatten(), return_counts=True)
-            print(self.counts)
-            self.extranious_memeber_end = self.points[np.argmin(self.counts)]
-            print("Member end ", self.extranious_memeber_end)
-            '''We must now remove any memebrs containing this point'''
-            self.members_to_remove = np.where(self.current_connections == self.extranious_memeber_end)
-            print("member index ", self.members_to_remove)
-            print("Member ", self.current_connections[self.members_to_remove[0]])
-            self.current_connections = np.delete(self.current_connections, self.members_to_remove[0],0)
+
 
         '''Plotting Stuff'''
         self.fig,self.ax = plt.subplots()
@@ -566,50 +597,24 @@ class main():
         self.Layer = self.Mesh_layer(self.foil*300,np.array([
                                                             np.array([[ self.third_chord[0]*300+10*np.cos(theta), self.third_chord[1]*300+10*np.sin(theta)] for theta in np.linspace(0, 2*np.pi,20)])[:-1],
                                                             np.array([[ self.three_quater_chord[0]*300+5*np.cos(theta), self.three_quater_chord[1]*300+5*np.sin(theta)] for theta in np.linspace(0, 2*np.pi,20)])[:-1]]))
-        self.all_points = self.all_points
+        self.all_points = self.all_points.astype(np.float64)
         self.forces = self.Generate_loading_data(self.foil, 0.2)
+
+        self.NN = len(self.all_points)          #Number of nodes
+        self.NDOF = self.DOF*self.NN            #Total number of degree of freedom
         self.Truss_Analysis(True)
-        self.fig = plt.figure()
-        self.ax = self.fig.add_subplot(111)
         self.Displacement_points = self.all_points+self.U*1000
         self.original_memberlengths = self.all_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
         self.original_s_length = np.sum(np.sqrt((self.original_memberlengths**2).sum(axis=1)))
-
         self.displaced_memberlengths = self.Displacement_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
         self.displaced_s_length = np.sqrt((self.displaced_memberlengths**2).sum(axis=1))
         self.Strain = self.displaced_s_length-self.original_s_length
-        print(self.original_memberlengths)
-        print(self.Strain)
         self.min_strain = np.min(self.Strain)
         self.max_strain = np.max(self.Strain)
         self.strain_range = self.max_strain-self.min_strain
         self.cmap = plt.cm.get_cmap('turbo')
-        for i, connection in enumerate(self.filtered_connections):
-            self.index_strain = self.Strain[i]
-            self.colour_encoding = (self.index_strain-self.min_strain)/self.strain_range
-            self.colour = self.cmap(self.colour_encoding)
-            self.start_location  = self.Displacement_points[int(connection[0])]
-            self.end_location  = self.Displacement_points[int(connection[1])]
-            self.ax.plot(self.start_location[0],self.start_location[1])
-            self.ax.plot(self.end_location[0],self.end_location[1])
-            self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]],c = self.colour)
-            self.ax.add_line(self.line)
-        #for connection in self.filtered_connections:
-        #    self.start_location  = self.all_points[int(connection[0])]
-        #    self.end_location  = self.all_points[int(connection[1])]
-        #    self.ax.plot(self.start_location[0],self.start_location[1])
-        #    self.ax.plot(self.end_location[0],self.end_location[1])
-        #    self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]], c='blue', linewidth = 1.5)
-        #    self.ax.add_line(self.line)
-        plt.title("Deformed Airfoil shape(x1000), NACA 2412, 5 Degrees, 20 ms^-1")
-        plt.gca().set_aspect('equal')
-        plt.show()
-        self.Optimise(False)
-    def Study(self):
-        '''Varies mesh density, orientation, shape'''
-        pass
-        #self.optimisation.trussopt(self.filtered_connections, self.all_points, self.bounding_polygon_indecies, self.convex_points_indecies, self.hole_node_indecies, self.forces, st = 1, sc =1, jc = 0)
 
-        print(time.time()-self.start_time)
+        self.Optimise(False)
 if __name__ == "__main__":
+    #cProfile.run('main()')
     main()

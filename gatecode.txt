@@ -1,0 +1,26 @@
+101010101010101010101010
+10011011011010010011010011011011010010010010011011010011010010011011010010011010011010011010010010011011010010011011011011010011010011010011011010011011010011011011011011011011011011010011011011010
+
+literature view
+no lit analysis
+tables of camparison
+
+methodology
+progressive results
+
+parameter optimisation
+
+verification
+
+60-80 pages
+
+no less than 20 references
+
+30-40 papers
+
+euler graph
+
+one stroke solution
+
+future works
+this thing is literally screaming for a higher order representation of the mesh density, like it would reduce the parameter space to nothing, like this is a time when an more complex potnei
