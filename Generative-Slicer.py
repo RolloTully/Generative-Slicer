@@ -11,24 +11,22 @@ import matplotlib.path as mpltPath
 import numpy as np
 from matplotlib.lines import Line2D
 from scipy.optimize import curve_fit
-import aeropy.xfoil_module as xf
 from scipy import interpolate
-import math, time, random, numba
+import math, time, random
 from tqdm import tqdm
 from math import gcd, ceil
 import itertools
 from scipy import sparse
 import numpy as np
-import cvxpy as cvx
+import cupy as cy
 import matplotlib.pyplot as plt
 from shapely.geometry import Point, LineString, Polygon
 from tqdm import tqdm
-from numba import jit
 import cProfile
-
+import aeropy.xfoil_module as xf
 class main():
     def __init__(self):
-        self.grid_resolution = 6#mm
+        self.grid_resolution = 4#mm
         self.Flow_Velocity = 20
         self.Angle_of_Attack = 5
         self.foil_number = '2412'
@@ -323,44 +321,35 @@ class main():
         self.node_loads.append(self.vector_link_Force[-1])
         return self.node_loads
 
-    def Truss_Analysis(self, verbose):
+    def Truss_Analysis(self):
         '''This thing works, dont touch it, its basicly black magic'''
         self.NE = len(self.filtered_connections)           #Number of bars
-        self.DOFCON = np.ones_like(self.all_points).astype(int)
-        self.Ur = []
-        self.Forces = np.zeros_like(self.all_points)
-        for index in range(self.bounding_polygon_indecies[0], self.bounding_polygon_indecies[1]+1):
-            self.Forces[index,:] = self.forces[index-self.bounding_polygon_indecies[1]]
-        for indexs in self.hole_node_indecies:
-            for i in range(indexs[0], indexs[1]+1):
-                self.DOFCON[i,:] = 0
-                self.Ur.append(0)
-                self.Ur.append(0)
-                #self.Ur.append(0)
         #Structural analysis
-        self.d = self.all_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
-        self.length = np.sqrt((np.square(self.d)).sum(axis=1))
+        self.d = self.acc_all_points[self.acc_connections[:,1],:] - self.acc_all_points[self.acc_connections[:,0],:]
+        self.length = cy.sqrt(cy.sum((cy.square(self.d)),axis = 1))
         self.theta = self.d.T/self.length
-        self.a = np.concatenate((-self.theta.T,self.theta.T), axis=1)
-        self.Global_Stiffness = np.zeros([self.NDOF,self.NDOF])
+        self.a = cy.concatenate((-self.theta.T,self.theta.T), axis=1)
+        self.Global_Stiffness = cy.zeros([self.NDOF,self.NDOF])
         '''Now parsing over each element to add the mto the global stiffness matrix'''
         for index in range(self.NE):
             self.aux  = 2*self.filtered_connections[index,:]
             self.indecies = np.r_[self.aux[0]:self.aux[0]+2,self.aux[1]:self.aux[1]+2]
-            self.ES = np.dot(self.a[index][np.newaxis].T*self.E*self.A,self.a[index][np.newaxis])/self.length[index]
-            self.Global_Stiffness[np.ix_(self.indecies,self.indecies)] = self.Global_Stiffness[np.ix_(self.indecies,self.indecies)] + self.ES
+            self.ES = cy.dot(self.a[index][np.newaxis].T*self.E*self.A,self.a[index][np.newaxis])/self.length[index]
+            self.Global_Stiffness[cy.ix_(self.indecies,self.indecies)] = self.Global_Stiffness[cy.ix_(self.indecies,self.indecies)] + self.ES
+        '''We shift to the GPU for accelerated compiute'''
+
         self.freeDOF = self.DOFCON.flatten().nonzero()[0]
         self.supportDOF = (self.DOFCON.flatten() == 0).nonzero()[0]
-        self.Kff = self.Global_Stiffness[np.ix_(self.freeDOF,self.freeDOF)]
+        self.Kff = self.Global_Stiffness[cy.ix_(self.freeDOF,self.freeDOF)]
         self.Pf = self.Forces.flatten()[self.freeDOF]
-        self.Uf = np.linalg.solve(self.Kff,self.Pf)
+        self.Uf = cy.linalg.solve(self.Kff,self.Pf)
         self.U = self.DOFCON.astype(float).flatten()
         self.U[self.freeDOF] = self.Uf
         self.U[self.supportDOF] = self.Ur
         self.U = self.U.reshape(self.NN,self.DOF)
-        self.Displacement_points = self.all_points+self.U
-        self.new_d = self.Displacement_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
-        self.new_length = np.sqrt((self.new_d**2).sum(axis=1))
+        self.Displacement_points = self.acc_all_points+self.U
+        self.new_d = self.Displacement_points[self.filtered_connections[:,1],:] - self.acc_all_points[self.filtered_connections[:,0],:]
+        self.new_length =  cy.sqrt((self.new_d**2).sum(axis=1))
         self.d_length = self.length-self.new_length
 
     def Optimise(self, verbose = True):
@@ -374,42 +363,64 @@ class main():
         self.memberlengths = self.all_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
         self.original_total_length = np.sum(np.sqrt((self.memberlengths**2).sum(axis=1)))
         self.frame_number = 0
-        self.working_lattice = self.filtered_connections.copy()
+
+        self.acc_connections = cy.asarray(self.filtered_connections)
+        self.working_lattice = self.acc_connections.copy()
+
+
+
+        self.Ur = []
+        for indexs in self.hole_node_indecies:
+            for i in range(indexs[0], indexs[1]+1):
+                self.DOFCON[i,:] = 0
+                self.Ur.append(0)
+                self.Ur.append(0)
+        self.Ur = cy.asarray(self.Ur)
+
+        self.Forces = np.zeros_like(self.all_points)
+        for index in range(self.bounding_polygon_indecies[0], self.bounding_polygon_indecies[1]+1):
+            self.Forces[index,:] = self.forces[index-self.bounding_polygon_indecies[1]]
+        self.Forces = cy.asarray(self.Forces)
+
+        '''Get the inital state of the system'''
+        self.Truss_Analysis()
+
         while not self.halt:
             self.frame_number +=1
             '''we must check that there arent any 'deadlegs' in the lattice, these cause large displacments that trips the stopping condition without contributing to its strength'''
-            self.Truss_Analysis(False)
-
-
-            '''Making a video of the optimisation'''
-            self.Strain = self.displaced_s_length-self.original_s_length
-            self.min_strain = np.min(self.Strain)
-            self.max_strain = np.max(self.Strain)
-            self.strain_range = self.max_strain-self.min_strain
-
-            self.fig = plt.figure()
-            self.ax = self.fig.add_subplot(111)
-            self.Displacement_points = self.all_points+self.U
-            for i, connection in enumerate(self.working_lattice):
-                self.index_strain = self.Strain[i]
-                self.colour_encoding = (self.index_strain-self.min_strain)/self.strain_range
-                self.colour = self.cmap(self.colour_encoding)
-                self.start_location  = self.Displacement_points[int(connection[0])]
-                self.end_location  = self.Displacement_points[int(connection[1])]
-                self.ax.plot(self.start_location[0],self.start_location[1])
-                self.ax.plot(self.end_location[0],self.end_location[1])
-                self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]],c = self.colour)
-                self.ax.add_line(self.line)
-            plt.title("Deformed Airfoil shape(x1000), NACA 2412, 5 Degrees, 20 ms^-1")
-            plt.gca().set_aspect('equal')
-            plt.savefig('C:\\Users\\rollo\\Documents\\GitHub\\Generative-Slicer\\Optimisation video\\'+str(self.frame_number)+'.png', dpi = 200)
 
 
 
+            #'''Making a video of the optimisation'''
+            #self.Strain = self.displaced_s_length-self.original_s_length
+            #self.min_strain = np.min(self.Strain)
+            #self.max_strain = np.max(self.Strain)
+            #self.strain_range = self.max_strain-self.min_strain
 
-            self.memberlengths = self.all_points[self.working_lattice[:,1],:] - self.all_points[self.working_lattice[:,0],:]
-            self.total_length = np.sum(np.sqrt((self.memberlengths**2).sum(axis=1)))
+            #self.fig = plt.figure()
+            #self.ax = self.fig.add_subplot(111)
+            #self.Displacement_points = self.all_points+self.U
+            #for i, connection in enumerate(self.working_lattice):
+            #    self.index_strain = self.Strain[i]
+            #    self.colour_encoding = (self.index_strain-self.min_strain)/self.strain_range
+            #    self.colour = self.cmap(self.colour_encoding)
+            #    self.start_location  = self.Displacement_points[int(connection[0])]
+            #    self.end_location  = self.Displacement_points[int(connection[1])]
+            #    self.ax.plot(self.start_location[0],self.start_location[1])
+            #    self.ax.plot(self.end_location[0],self.end_location[1])
+            #    self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]],c = self.colour)
+            #    self.ax.add_line(self.line)
+            #plt.title("Deformed Airfoil shape(x1000), NACA 2412, 5 Degrees, 20 ms^-1")
+            #plt.gca().set_aspect('equal')
+            #plt.savefig('C:\\Users\\rollo\\Documents\\GitHub\\Generative-Slicer\\Optimisation video\\'+str(self.frame_number)+'.png', dpi = 200)
+
+
+
+            '''Derives the inital structure costs'''
+            self.memberlengths = self.acc_all_points[self.working_lattice[:,1],:] - self.acc_all_points[self.working_lattice[:,0],:]
+            self.total_length = cy.sum(cy.sqrt((self.memberlengths**2).sum( axis = 1)))
             self.Structure_Mass.append(self.total_length/self.original_total_length)
+
             self.valid_changes = []
             for connection in self.working_lattice:
                 self.valid = True
@@ -429,31 +440,31 @@ class main():
                 break
 
             self.costs = []
-            self.indexes = []
-            for valid_change in self.valid_changes:
-                self.indexes.append(np.where(np.all(self.current_connections == valid_change, axis=1))[0])
-            print("We here")
+            self.indexes = [cy.where(cy.all(self.acc_current_connections == cy.asarray(valid_change), axis=1))[0]    for valid_change in self.valid_changes ]
+            #for valid_change in self.valid_changes:
+            #    self.indexes.append(cy.where(cy.all(self.current_connections == cy.asarray(valid_change), axis=1))[0])
+
             for self.index in tqdm(self.indexes):
                 try:
-                    self.filtered_connections = np.delete(self.working_lattice, self.index,0)
-                    self.Truss_Analysis(False)
-                    self.costs.append(np.max(np.abs(self.d_length)))
+                    self.filtered_connections = cy.delete(self.working_lattice, self.index,0)
+                    self.Truss_Analysis()
+                    self.costs.append(cy.max(cy.abs(self.d_length)))
                 except:
                     self.costs.append(1e9)
                     pass
                 #print("Removing member ", self.index," this is ",self.current_connections[self.index]," this has a cost of ",np.sum(self.d_length))
-            self.index_min_cost = np.argmin(self.costs)
+            self.index_min_cost = cy.argmin(self.costs)
             print(self.costs)
             self.cost = self.costs[self.index_min_cost]
             print("minimum cost index: ", self.index_min_cost, " Cost: ", self.cost)
-            if np.max(np.abs(self.d_length)) >5:
+            if cy.max(cy.abs(self.d_length)) >5:
                 self.output_lattice = self.working_lattice
                 self.halt = True
             else:
-                self.working_lattice = np.delete(self.working_lattice, self.indexes[self.index_min_cost],0)
-                self.valid_changes = np.array(self.valid_changes)
-                self.Structure_total_displacment.append(np.sum(np.abs(self.d_length)))
-                self.Peak_displacment.append(np.max(np.abs(self.d_length)))
+                self.working_lattice = cy.delete(self.working_lattice, self.indexes[self.index_min_cost],0)
+                self.valid_changes = cy.array(self.valid_changes)
+                self.Structure_total_displacment.append(cy.sum(cy.abs(self.d_length)))
+                self.Peak_displacment.append(cy.max(cy.abs(self.d_length)))
             '''Floppy Member removal'''
             print("and We here")
             #self.points, self.counts = np.unique(self.current_connections.flatten(), return_counts=True)
@@ -538,7 +549,7 @@ class main():
         plt.show()
 
 
-        self.Truss_Analysis(False)
+        self.Truss_Analysis()
         self.fig = plt.figure()
         self.ax = self.fig.add_subplot(111)
         self.Displacement_points = self.all_points+self.U*100
@@ -598,22 +609,23 @@ class main():
                                                             np.array([[ self.third_chord[0]*300+10*np.cos(theta), self.third_chord[1]*300+10*np.sin(theta)] for theta in np.linspace(0, 2*np.pi,20)])[:-1],
                                                             np.array([[ self.three_quater_chord[0]*300+5*np.cos(theta), self.three_quater_chord[1]*300+5*np.sin(theta)] for theta in np.linspace(0, 2*np.pi,20)])[:-1]]))
         self.all_points = self.all_points.astype(np.float64)
+        self.acc_all_points = cy.asarray(self.all_points)
         self.forces = self.Generate_loading_data(self.foil, 0.2)
 
         self.NN = len(self.all_points)          #Number of nodes
         self.NDOF = self.DOF*self.NN            #Total number of degree of freedom
-        self.Truss_Analysis(True)
-        self.Displacement_points = self.all_points+self.U*1000
-        self.original_memberlengths = self.all_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
-        self.original_s_length = np.sum(np.sqrt((self.original_memberlengths**2).sum(axis=1)))
-        self.displaced_memberlengths = self.Displacement_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
-        self.displaced_s_length = np.sqrt((self.displaced_memberlengths**2).sum(axis=1))
-        self.Strain = self.displaced_s_length-self.original_s_length
-        self.min_strain = np.min(self.Strain)
-        self.max_strain = np.max(self.Strain)
-        self.strain_range = self.max_strain-self.min_strain
+        #self.Truss_Analysis(True)
+        #self.Displacement_points = self.all_points+self.U*1000
+        #self.original_memberlengths = self.all_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
+        #self.original_s_length = np.sum(np.sqrt((self.original_memberlengths**2).sum(axis=1)))
+        #self.displaced_memberlengths = self.Displacement_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
+        #self.displaced_s_length = np.sqrt((self.displaced_memberlengths**2).sum(axis=1))
+        #self.Strain = self.displaced_s_length-self.original_s_length
+        #self.min_strain = np.min(self.Strain)
+        #self.max_strain = np.max(self.Strain)
+        #self.strain_range = self.max_strain-self.min_strain
         self.cmap = plt.cm.get_cmap('turbo')
-
+        self.DOFCON = cy.ones_like(self.acc_all_points, dtype = int)
         self.Optimise(False)
 if __name__ == "__main__":
     #cProfile.run('main()')
