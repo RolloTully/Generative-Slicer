@@ -349,12 +349,14 @@ class main():
             self.Global_Stiffness[np.ix_(self.indecies,self.indecies)] = self.Global_Stiffness[np.ix_(self.indecies,self.indecies)] + self.ES
         self.freeDOF = self.DOFCON.flatten().nonzero()[0]
         self.supportDOF = (self.DOFCON.flatten() == 0).nonzero()[0]
+
         self.Kff = self.Global_Stiffness[np.ix_(self.freeDOF,self.freeDOF)]
         self.Pf = self.Forces.flatten()[self.freeDOF]
         self.Uf = np.linalg.solve(self.Kff,self.Pf)
         self.U = self.DOFCON.astype(float).flatten()
         self.U[self.freeDOF] = self.Uf
         self.U[self.supportDOF] = self.Ur
+        print(self.U.shape, self.supportDOF.shape)
         self.U = self.U.reshape(self.NN,self.DOF)
         self.Displacement_points = self.all_points+self.U
         self.new_d = self.Displacement_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
