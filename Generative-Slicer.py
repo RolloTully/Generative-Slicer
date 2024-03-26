@@ -339,17 +339,10 @@ class main():
             self.indecies = np.r_[self.aux[0]:self.aux[0]+3,self.aux[1]:self.aux[1]+3]
             self.k = ((self.E*self.A)/self.length[index])
             self.transformation_matrix = np.zeros((6,6))
-            #print(self.a[index].reshape((2,2)))
-            #print(self.a[index].reshape((2,2)).flatten())
-
             self.transformation_matrix[0:2,0:2] = self.a[index].reshape((2,2))
             self.transformation_matrix[3:5,3:5] = self.a[index].reshape((2,2))
             self.transformation_matrix[2,2] = 1
             self.transformation_matrix[5,5] = 1
-            #print(self.transformation_matrix)
-            #print(self.transformation_matrix.flatten())
-
-
             self.local_stiffness = np.array([[self.k,0,0,-self.k,0,0],
                                              [0,12*self.k/self.length[index]**2, 6*self.k/self.length[index],0,-12*self.k/self.length[index]**2, 6*self.k/self.length[index]],
                                              [0,6*self.k/self.length[index], 4*self.k,0,-6*self.k/self.length[index], 2*self.k],
@@ -357,31 +350,15 @@ class main():
                                              [0,-12*self.k/self.length[index]**2,-6*self.k/self.length[index],0,12*self.k/self.length[index],-6*self.k/self.length[index]],
                                              [0,6*self.k/self.length[index], 2*self.k,0,-6*self.k/self.length[index], 4*self.k]
                                              ])
-            #np.printoptions(precision=2, linewidth=np.inf)
-            #print(self.transformation_matrix)
-                #print(self.local_stiffness)
-            #print(self.local_stiffness)
-            self.ES = np.dot(np.dot(self.transformation_matrix.flatten().T,self.local_stiffness.flatten()),self.transformation_matrix[np.newaxis])
-            #print(self.ES)
-
+            self.ES = np.dot(np.dot(self.transformation_matrix.T,self.local_stiffness),self.transformation_matrix)
             self.Global_Stiffness[np.ix_(self.indecies,self.indecies)] = self.Global_Stiffness[np.ix_(self.indecies,self.indecies)] + self.ES
-            #print(self.Global_Stiffness[np.ix_(self.indecies,self.indecies)])
-            #print(self.Global_Stiffness)
-            #input()
         self.supportDOF = (self.DOFCON.flatten() == 0).nonzero()[0]
-        #print(self.supportDOF)
         self.Kff = self.Global_Stiffness[np.ix_(self.freeDOF,self.freeDOF)]
-        print(self.Kff)
-        print(self.Pf)
-        input()
         self.Uf = np.linalg.solve(self.Kff,self.Pf)
         self.U = self.DOFCON.astype(float).flatten()
         self.U[self.freeDOF] = self.Uf
-        #print(self.U.shape, self.supportDOF.shape, np.array(self.Ur).shape)
         self.U[self.supportDOF] = self.Ur
         self.U = self.U.reshape(self.NN,self.DOF)[:,0:2]
-        print(self.U)
-        input()
         self.Displacement_points = self.all_points+self.U
         self.new_d = self.Displacement_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
         self.new_length = np.sqrt((self.new_d**2).sum(axis=1))
@@ -517,6 +494,8 @@ class main():
                     self.ax.plot(self.end_location[0],self.end_location[1])
                     self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]],c = 'red')
                     self.ax.add_line(self.line)
+                print(self.valid_changes)
+                print(self.index_min_cost)
                 self.start_location = self.all_points[int(self.valid_changes[self.index_min_cost,0])]
                 self.end_location = self.all_points[int(self.valid_changes[self.index_min_cost,1])]
                 self.ax.plot(self.start_location[0],self.start_location[1])
@@ -615,8 +594,6 @@ class main():
         self.forces = self.Generate_loading_data(self.foil, 0.2)
         '''Pre-processing as much as possible'''
         self.DOFCON = np.ones((self.all_points.shape[0],self.DOF)).astype(int)
-        #print(self.DOFCON.shape)
-        #input()
         self.Ur = []
         self.Forces = np.zeros((self.all_points.shape[0],self.DOF))
         for index in range(self.bounding_polygon_indecies[0], self.bounding_polygon_indecies[1]+1):
@@ -627,15 +604,8 @@ class main():
                 self.Ur.append(0)
                 self.Ur.append(0)
                 self.Ur.append(0)
-        np.set_printoptions(threshold=np.inf)
-        print(self.Forces)
-        print(self.DOFCON)
-        print(self.Ur)
-        input()
-
         self.freeDOF = self.DOFCON.flatten().nonzero()[0]
         self.Pf = self.Forces.flatten()[self.freeDOF]
-
         self.NN = len(self.all_points)          #Number of nodes
         self.NDOF = self.DOF*self.NN            #Total number of degree of freedom
         self.Truss_Analysis(True)
