@@ -29,7 +29,7 @@ from scipy.sparse.linalg import spsolve
 
 class main():
     def __init__(self):
-        self.grid_resolution = 5#mm
+        self.grid_resolution = 10#mm
         self.Flow_Velocity = 20
         self.Angle_of_Attack = 5
         self.foil_number = '2412'
@@ -324,7 +324,7 @@ class main():
         self.node_loads.append(self.vector_link_Force[-1])
         return self.node_loads
 
-    def Truss_Analysis(self, verbose):
+    def Truss_Analysis(self, connections):
         '''This thing works, dont touch it, its basicly black magic'''
         self.NE = len(self.filtered_connections)           #Number of bars
         self.d = self.all_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
@@ -355,7 +355,7 @@ class main():
             self.Global_Stiffness[np.ix_(self.indecies,self.indecies)] = self.Global_Stiffness[np.ix_(self.indecies,self.indecies)] + self.ES
         self.supportDOF = (self.DOFCON.flatten() == 0).nonzero()[0]
         self.Kff = self.Global_Stiffness[np.ix_(self.freeDOF,self.freeDOF)]
-        self.Uf = cy.linalg.solve(cy.asarray(self.Kff.todense()),cy.asarray(self.Pf)).get()
+        self.Uf = spsolve(self.Kff,self.Pf)
         self.U = self.DOFCON.astype(float).flatten()
         self.U[self.freeDOF] = self.Uf
         self.U[self.supportDOF] = self.Ur
@@ -380,52 +380,60 @@ class main():
         while not self.halt:
             self.frame_number +=1
             '''we must check that there arent any 'deadlegs' in the lattice, these cause large displacments that trips the stopping condition without contributing to its strength'''
-            #'''Making a video of the optimisation'''
-            #self.Strain = self.displaced_s_length-self.original_s_length
-            #self.min_strain = np.min(self.Strain)
-            #self.max_strain = np.max(self.Strain)
-            #self.strain_range = self.max_strain-self.min_strain
+            '''Making a video of the optimisation'''
+            self.Truss_Analysis(False)
+            self.Strain = self.displaced_s_length-self.original_s_length
+            self.min_strain = np.min(self.Strain)
+            self.max_strain = np.max(self.Strain)
+            self.strain_range = self.max_strain-self.min_strain
 
-            #self.fig = plt.figure()
-            #self.ax = self.fig.add_subplot(111)
-            #self.Displacement_points = self.all_points+self.U
-            #for i, connection in enumerate(self.working_lattice):
-            #    self.index_strain = self.Strain[i]
-            #    self.colour_encoding = (self.index_strain-self.min_strain)/self.strain_range
-            #    self.colour = self.cmap(self.colour_encoding)
-            #    self.start_location  = self.Displacement_points[int(connection[0])]
-            #    self.end_location  = self.Displacement_points[int(connection[1])]
-            #    self.ax.plot(self.start_location[0],self.start_location[1])
-            #    self.ax.plot(self.end_location[0],self.end_location[1])
-            #    self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]],c = self.colour)
-            #    self.ax.add_line(self.line)
-            #plt.title("Deformed Airfoil shape(x1000), NACA 2412, 5 Degrees, 20 ms^-1")
-            #plt.gca().set_aspect('equal')
-            #plt.savefig('C:\\Users\\rollo\\Documents\\GitHub\\Generative-Slicer\\Optimisation video\\'+str(self.frame_number)+'.png', dpi = 200)
-
+            self.fig = plt.figure()
+            self.ax = self.fig.add_subplot(111)
+            self.Displacement_points = self.all_points+self.U
+            for i, connection in enumerate(self.working_lattice):
+                self.index_strain = self.Strain[i]
+                self.colour_encoding = (self.index_strain-self.min_strain)/self.strain_range
+                self.colour = self.cmap(self.colour_encoding)
+                self.start_location  = self.Displacement_points[int(connection[0])]
+                self.end_location  = self.Displacement_points[int(connection[1])]
+                self.ax.plot(self.start_location[0],self.start_location[1])
+                self.ax.plot(self.end_location[0],self.end_location[1])
+                self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]],c = self.colour)
+                self.ax.add_line(self.line)
+            plt.title("Deformed Airfoil shape(x1000), NACA 2412, 5 Degrees, 20 ms^-1")
+            plt.gca().set_aspect('equal')
+            plt.savefig('C:\\Users\\rollo\\Documents\\GitHub\\Generative-Slicer\\Optimisation video\\'+str(self.frame_number)+'.png', dpi = 200)
+            plt.close()
             self.memberlengths = self.all_points[self.working_lattice[:,1],:] - self.all_points[self.working_lattice[:,0],:]
             self.total_length = np.sum(np.sqrt((self.memberlengths**2).sum(axis=1)))
             self.Structure_Mass.append(self.total_length/self.original_total_length)
             self.valid_changes = []
             for connection in self.working_lattice:
                 self.valid = True
-                if not (connection[0] and connection[1]) in range(self.bounding_polygon_indecies[0],self.bounding_polygon_indecies[1]+1):
-                    for hole in self.hole_node_indecies:
-                        if not (connection[0] and connection[1]) in range(hole[0],hole[1]+1):
-                            self.valid_changes.append(connection)
+                if (connection[0] and connection[1]) in range(self.bounding_polygon_indecies[0],self.bounding_polygon_indecies[1]+1):
+                    self.valid = False
+
+                for hole in self.hole_node_indecies:
+                    if (connection[0] and connection[1]) in range(hole[0],hole[1]+1):
+                        self.valid = False
+                if self.valid:
+                    self.valid_changes.append(connection)
 
 
             #self.fig = plt.figure()
             #self.ax = self.fig.add_subplot(111)
-            #for i, connection in enumerate(self.valid_changes):
+            #for connection in self.valid_changes:
             #    self.start_location  = self.all_points[int(connection[0])]
             #    self.end_location  = self.all_points[int(connection[1])]
             #    self.ax.plot(self.start_location[0],self.start_location[1])
             #    self.ax.plot(self.end_location[0],self.end_location[1])
-            #    self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]])
+            #    self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]],c = 'red')
             #    self.ax.add_line(self.line)
+            #plt.title("Grid of valid changes")
             #plt.gca().set_aspect('equal')
-            #plt.show()
+            #plt.show()#block=False)
+            #plt.pause(5)
+            #plt.close()
 
             if self.valid_changes == []:
                 self.output_lattice = self.working_lattice
@@ -434,7 +442,7 @@ class main():
             self.costs = []
             self.indexes = []
             for valid_change in self.valid_changes:
-                self.indexes.append(np.where(np.all(self.current_connections == valid_change, axis=1))[0])
+                self.indexes.append(np.where(np.all(self.working_lattice == valid_change, axis=1))[0])
             for self.index in tqdm(self.indexes):
                 try:
                     self.filtered_connections = np.delete(self.working_lattice, self.index,0)
@@ -445,7 +453,7 @@ class main():
                     pass
                 #print("Removing member ", self.index," this is ",self.current_connections[self.index]," this has a cost of ",np.sum(self.d_length))
             self.index_min_cost = np.argmin(self.costs)
-            print(self.costs)
+            #print(self.costs)
             self.cost = self.costs[self.index_min_cost]
             print("minimum cost index: ", self.index_min_cost, " Cost: ", self.cost)
             if np.max(np.abs(self.d_length)) >5:
@@ -456,8 +464,8 @@ class main():
                 self.valid_changes = np.array(self.valid_changes)
                 self.Structure_total_displacment.append(np.sum(np.abs(self.d_length)))
                 self.Peak_displacment.append(np.max(np.abs(self.d_length)))
-            '''Floppy Member removal'''
-            print("and We here")
+            #'''Floppy Member removal'''
+            #print("and We here")
             #self.points, self.counts = np.unique(self.current_connections.flatten(), return_counts=True)
             #print(np.count_nonzero(self.counts==1))
             #while 1 in self.counts:
@@ -474,7 +482,7 @@ class main():
 
 
             '''Live Plotting'''
-            if True:
+            if False:
                 '''Process Logging'''
                 print("____________________________________________________________________________________")
                 print(len(self.valid_changes), "Valid changes can be made.")
@@ -491,15 +499,13 @@ class main():
                     self.ax.plot(self.end_location[0],self.end_location[1])
                     self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]], c='blue')
                     self.ax.add_line(self.line)
-                for connection in self.valid_changes:
-                    self.start_location  = self.all_points[int(connection[0])]
-                    self.end_location  = self.all_points[int(connection[1])]
-                    self.ax.plot(self.start_location[0],self.start_location[1])
-                    self.ax.plot(self.end_location[0],self.end_location[1])
-                    self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]],c = 'red')
-                    self.ax.add_line(self.line)
-                print(self.valid_changes)
-                print(self.index_min_cost)
+                #for connection in self.valid_changes:
+                #    self.start_location  = self.all_points[int(connection[0])]
+                #    self.end_location  = self.all_points[int(connection[1])]
+                #    self.ax.plot(self.start_location[0],self.start_location[1])
+                #    self.ax.plot(self.end_location[0],self.end_location[1])
+                #    self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]],c = 'red')
+                #    self.ax.add_line(self.line)
                 self.start_location = self.all_points[int(self.valid_changes[self.index_min_cost,0])]
                 self.end_location = self.all_points[int(self.valid_changes[self.index_min_cost,1])]
                 self.ax.plot(self.start_location[0],self.start_location[1])
@@ -509,7 +515,7 @@ class main():
                 plt.title("Grid of valid changes")
                 plt.gca().set_aspect('equal')
                 plt.show(block=False)
-                plt.pause(1)
+                plt.pause(5)
                 plt.close()
 
 
