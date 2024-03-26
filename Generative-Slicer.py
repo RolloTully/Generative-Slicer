@@ -31,7 +31,7 @@ class main():
         self.Flow_Velocity = 20
         self.Angle_of_Attack = 5
         self.foil_number = '2412'
-        self.DOF = 3                  #2D Truss
+        self.DOF = 6                  #2D Truss
         self.E = 4.107e9
         self.A = 4e-4
         self.G = 0.35e5
@@ -329,6 +329,7 @@ class main():
         self.length = np.sqrt((np.square(self.d)).sum(axis=1))
         self.theta = self.d.T/self.length
         print(self.theta[0])
+        print(self.theta[1])
         print(self.d[0])
         print(self.theta.T[0])
         self.a = np.concatenate((-self.theta.T,self.theta.T), axis=1)
@@ -337,9 +338,17 @@ class main():
         self.Global_Stiffness = np.zeros([self.NDOF,self.NDOF])
         '''Now parsing over each element to add the mto the global stiffness matrix'''
         for index in range(self.NE):
-            self.aux  = 2*self.filtered_connections[index,:]
-            self.indecies = np.r_[self.aux[0]:self.aux[0]+2,self.aux[1]:self.aux[1]+2]
-            self.ES = np.dot(self.a[index][np.newaxis].T*((self.E*self.A)/self.length[index]),self.a[index][np.newaxis])
+            self.aux  = 3*self.filtered_connections[index,:]
+            self.indecies = np.r_[self.aux[0]:self.aux[0]+3,self.aux[1]:self.aux[1]+3]
+            self.k = ((self.E*self.A)/self.length[index])
+            self.local_stiffness = np.array([[self.k,0,0,-self.k,0,0],
+                                             [0,12*self.l/self.length[index]**2, 6*self.k/self.length[index],0,-12*self.l/self.length[index]**2, 6*self.k/self.length[index]],
+                                             [0,6*self.k/self.length[index], 4*self.k,0,-6*self.k/self.length[index], 2*self.k],
+                                             [-self.k,0,0,self.k,0,0],
+                                             [0,-12*self.k/self.length[index]**2,-6*self.k/self.length[index],0,12*self.k/self.length[index],-6*self.k/self.lenght[index]],
+                                             [0,6*sef.k/self.length[index], 2*self.k,0,-6*self.k/self.length[index], 4*self.k]
+                                             ]).flatten()
+            self.ES = np.dot(np.dot(self.a[index][np.newaxis].T,self.local_stiffness),self.a[index][np.newaxis])
             self.Global_Stiffness[np.ix_(self.indecies,self.indecies)] = self.Global_Stiffness[np.ix_(self.indecies,self.indecies)] + self.ES
         self.supportDOF = (self.DOFCON.flatten() == 0).nonzero()[0]
         self.Kff = self.Global_Stiffness[np.ix_(self.freeDOF,self.freeDOF)]
