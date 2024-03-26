@@ -13,17 +13,15 @@ from matplotlib.lines import Line2D
 from scipy.optimize import curve_fit
 import aeropy.xfoil_module as xf
 from scipy import interpolate
-import math, time, random, numba
+import math, time, random
 from tqdm import tqdm
 from math import gcd, ceil
 import itertools
 from scipy import sparse
 import numpy as np
-import cvxpy as cvx
 import matplotlib.pyplot as plt
 from shapely.geometry import Point, LineString, Polygon
 from tqdm import tqdm
-from numba import jit
 import cProfile
 
 class main():
