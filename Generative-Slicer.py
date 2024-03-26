@@ -352,6 +352,11 @@ class main():
 
         self.Kff = self.Global_Stiffness[np.ix_(self.freeDOF,self.freeDOF)]
         self.Pf = self.Forces.flatten()[self.freeDOF]
+        np.set_printoptions(threshold=np.inf)
+        print(self.Kff)
+        print(self.Pf)
+        print(self.Kff.shape)
+        input()
         self.Uf = np.linalg.solve(self.Kff,self.Pf)
         self.U = self.DOFCON.astype(float).flatten()
         self.U[self.freeDOF] = self.Uf
