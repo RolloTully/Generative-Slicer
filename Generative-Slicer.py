@@ -25,6 +25,7 @@ from tqdm import tqdm
 import cProfile
 import cupy as cy
 
+
 class main():
     def __init__(self):
         self.grid_resolution = 7#mm
@@ -328,29 +329,40 @@ class main():
         self.d = self.all_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
         self.length = np.sqrt((np.square(self.d)).sum(axis=1))
         self.theta = self.d.T/self.length
-        print(self.theta[0])
-        print(self.theta[1])
-        print(self.d[0])
-        print(self.theta.T[0])
         self.a = np.concatenate((-self.theta.T,self.theta.T), axis=1)
-        print(self.a[0])
-        input()
+        print(self.a)
+
         self.Global_Stiffness = np.zeros([self.NDOF,self.NDOF])
         '''Now parsing over each element to add the mto the global stiffness matrix'''
         for index in range(self.NE):
             self.aux  = 3*self.filtered_connections[index,:]
             self.indecies = np.r_[self.aux[0]:self.aux[0]+3,self.aux[1]:self.aux[1]+3]
             self.k = ((self.E*self.A)/self.length[index])
+            self.transformation_matrix = np.zeros((6,6))
+            print(self.a[index].reshape((2,2)))
+            print(self.a[index].reshape((2,2)).flatten())
+
+            self.transformation_matrix[0:2,0:2] = self.a[index].reshape((2,2))
+            self.transformation_matrix[3:5,3:5] = self.a[index].reshape((2,2))
+            self.transformation_matrix[2,2] = 1
+            self.transformation_matrix[5,5] = 1
+            print(self.transformation_matrix)
+            print(self.transformation_matrix.flatten())
+
+
             self.local_stiffness = np.array([[self.k,0,0,-self.k,0,0],
-                                             [0,12*self.l/self.length[index]**2, 6*self.k/self.length[index],0,-12*self.l/self.length[index]**2, 6*self.k/self.length[index]],
+                                             [0,12*self.k/self.length[index]**2, 6*self.k/self.length[index],0,-12*self.k/self.length[index]**2, 6*self.k/self.length[index]],
                                              [0,6*self.k/self.length[index], 4*self.k,0,-6*self.k/self.length[index], 2*self.k],
                                              [-self.k,0,0,self.k,0,0],
-                                             [0,-12*self.k/self.length[index]**2,-6*self.k/self.length[index],0,12*self.k/self.length[index],-6*self.k/self.lenght[index]],
-                                             [0,6*sef.k/self.length[index], 2*self.k,0,-6*self.k/self.length[index], 4*self.k]
-                                             ]).flatten()
-            self.ES = np.dot(np.dot(self.a[index][np.newaxis].T,self.local_stiffness),self.a[index][np.newaxis])
+                                             [0,-12*self.k/self.length[index]**2,-6*self.k/self.length[index],0,12*self.k/self.length[index],-6*self.k/self.length[index]],
+                                             [0,6*self.k/self.length[index], 2*self.k,0,-6*self.k/self.length[index], 4*self.k]
+                                             ])
+            #with np.printoptions(precision=4, suppress=True, formatter={'float': '{:0.4f}'.format}, linewidth=100):
+                #print(self.local_stiffness)
+            self.ES = np.dot(np.dot(self.transformation_matrix.flatten().T,self.local_stiffness.flatten()),self.transformation_matrix[np.newaxis])
             self.Global_Stiffness[np.ix_(self.indecies,self.indecies)] = self.Global_Stiffness[np.ix_(self.indecies,self.indecies)] + self.ES
-        self.supportDOF = (self.DOFCON.flatten() == 0).nonzero()[0]
+        self.supportDOF = (self.DOFCON.flatten() == 0)
+        print(self.supportDOF)
         self.Kff = self.Global_Stiffness[np.ix_(self.freeDOF,self.freeDOF)]
         self.Uf = cy.linalg.solve(cy.asarray(self.Kff),cy.asarray(self.Pf)).get()
         self.U = self.DOFCON.astype(float).flatten()
@@ -589,7 +601,7 @@ class main():
         self.all_points = self.all_points.astype(np.float64)
         self.forces = self.Generate_loading_data(self.foil, 0.2)
         '''Pre-processing as much as possible'''
-        self.DOFCON = np.ones_like(self.all_points).astype(int)
+        self.DOFCON = np.ones_like(self.all_points*3).astype(int)
         self.Ur = []
         self.Forces = np.zeros_like(self.all_points)
         for index in range(self.bounding_polygon_indecies[0], self.bounding_polygon_indecies[1]+1):
@@ -597,6 +609,10 @@ class main():
         for indexs in self.hole_node_indecies:
             for i in range(indexs[0], indexs[1]+1):
                 self.DOFCON[i,:] = 0
+                self.Ur.append(0)
+                self.Ur.append(0)
+                self.Ur.append(0)
+                self.Ur.append(0)
                 self.Ur.append(0)
                 self.Ur.append(0)
 
