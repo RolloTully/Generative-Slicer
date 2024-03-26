@@ -13,26 +13,25 @@ from matplotlib.lines import Line2D
 from scipy.optimize import curve_fit
 import aeropy.xfoil_module as xf
 from scipy import interpolate
-import math, time, random, numba
+import math, time, random
 from tqdm import tqdm
 from math import gcd, ceil
 import itertools
 from scipy import sparse
 import numpy as np
-import cvxpy as cvx
 import matplotlib.pyplot as plt
 from shapely.geometry import Point, LineString, Polygon
 from tqdm import tqdm
-from numba import jit
 import cProfile
+import cupy as cy
 
 class main():
     def __init__(self):
-        self.grid_resolution = 6#mm
+        self.grid_resolution = 7#mm
         self.Flow_Velocity = 20
         self.Angle_of_Attack = 5
         self.foil_number = '2412'
-        self.DOF = 2                  #2D Truss
+        self.DOF = 3                  #2D Truss
         self.E = 4.107e9
         self.A = 4e-4
         self.G = 0.35e5
@@ -326,34 +325,25 @@ class main():
     def Truss_Analysis(self, verbose):
         '''This thing works, dont touch it, its basicly black magic'''
         self.NE = len(self.filtered_connections)           #Number of bars
-        self.DOFCON = np.ones_like(self.all_points).astype(int)
-        self.Ur = []
-        self.Forces = np.zeros_like(self.all_points)
-        for index in range(self.bounding_polygon_indecies[0], self.bounding_polygon_indecies[1]+1):
-            self.Forces[index,:] = self.forces[index-self.bounding_polygon_indecies[1]]
-        for indexs in self.hole_node_indecies:
-            for i in range(indexs[0], indexs[1]+1):
-                self.DOFCON[i,:] = 0
-                self.Ur.append(0)
-                self.Ur.append(0)
-                #self.Ur.append(0)
-        #Structural analysis
         self.d = self.all_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
         self.length = np.sqrt((np.square(self.d)).sum(axis=1))
         self.theta = self.d.T/self.length
+        print(self.theta[0])
+        print(self.d[0])
+        print(self.theta.T[0])
         self.a = np.concatenate((-self.theta.T,self.theta.T), axis=1)
+        print(self.a[0])
+        input()
         self.Global_Stiffness = np.zeros([self.NDOF,self.NDOF])
         '''Now parsing over each element to add the mto the global stiffness matrix'''
         for index in range(self.NE):
             self.aux  = 2*self.filtered_connections[index,:]
             self.indecies = np.r_[self.aux[0]:self.aux[0]+2,self.aux[1]:self.aux[1]+2]
-            self.ES = np.dot(self.a[index][np.newaxis].T*self.E*self.A,self.a[index][np.newaxis])/self.length[index]
+            self.ES = np.dot(self.a[index][np.newaxis].T*((self.E*self.A)/self.length[index]),self.a[index][np.newaxis])
             self.Global_Stiffness[np.ix_(self.indecies,self.indecies)] = self.Global_Stiffness[np.ix_(self.indecies,self.indecies)] + self.ES
-        self.freeDOF = self.DOFCON.flatten().nonzero()[0]
         self.supportDOF = (self.DOFCON.flatten() == 0).nonzero()[0]
         self.Kff = self.Global_Stiffness[np.ix_(self.freeDOF,self.freeDOF)]
-        self.Pf = self.Forces.flatten()[self.freeDOF]
-        self.Uf = np.linalg.solve(self.Kff,self.Pf)
+        self.Uf = cy.linalg.solve(cy.asarray(self.Kff),cy.asarray(self.Pf)).get()
         self.U = self.DOFCON.astype(float).flatten()
         self.U[self.freeDOF] = self.Uf
         self.U[self.supportDOF] = self.Ur
@@ -381,31 +371,28 @@ class main():
             self.Truss_Analysis(False)
 
 
-            '''Making a video of the optimisation'''
-            self.Strain = self.displaced_s_length-self.original_s_length
-            self.min_strain = np.min(self.Strain)
-            self.max_strain = np.max(self.Strain)
-            self.strain_range = self.max_strain-self.min_strain
+            #'''Making a video of the optimisation'''
+            #self.Strain = self.displaced_s_length-self.original_s_length
+            #self.min_strain = np.min(self.Strain)
+            #self.max_strain = np.max(self.Strain)
+            #self.strain_range = self.max_strain-self.min_strain
 
-            self.fig = plt.figure()
-            self.ax = self.fig.add_subplot(111)
-            self.Displacement_points = self.all_points+self.U
-            for i, connection in enumerate(self.working_lattice):
-                self.index_strain = self.Strain[i]
-                self.colour_encoding = (self.index_strain-self.min_strain)/self.strain_range
-                self.colour = self.cmap(self.colour_encoding)
-                self.start_location  = self.Displacement_points[int(connection[0])]
-                self.end_location  = self.Displacement_points[int(connection[1])]
-                self.ax.plot(self.start_location[0],self.start_location[1])
-                self.ax.plot(self.end_location[0],self.end_location[1])
-                self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]],c = self.colour)
-                self.ax.add_line(self.line)
-            plt.title("Deformed Airfoil shape(x1000), NACA 2412, 5 Degrees, 20 ms^-1")
-            plt.gca().set_aspect('equal')
-            plt.savefig('C:\\Users\\rollo\\Documents\\GitHub\\Generative-Slicer\\Optimisation video\\'+str(self.frame_number)+'.png', dpi = 200)
-
-
-
+            #self.fig = plt.figure()
+            #self.ax = self.fig.add_subplot(111)
+            #self.Displacement_points = self.all_points+self.U
+            #for i, connection in enumerate(self.working_lattice):
+            #    self.index_strain = self.Strain[i]
+            #    self.colour_encoding = (self.index_strain-self.min_strain)/self.strain_range
+            #    self.colour = self.cmap(self.colour_encoding)
+            #    self.start_location  = self.Displacement_points[int(connection[0])]
+            #    self.end_location  = self.Displacement_points[int(connection[1])]
+            #    self.ax.plot(self.start_location[0],self.start_location[1])
+            #    self.ax.plot(self.end_location[0],self.end_location[1])
+            #    self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]],c = self.colour)
+            #    self.ax.add_line(self.line)
+            #plt.title("Deformed Airfoil shape(x1000), NACA 2412, 5 Degrees, 20 ms^-1")
+            #plt.gca().set_aspect('equal')
+            #plt.savefig('C:\\Users\\rollo\\Documents\\GitHub\\Generative-Slicer\\Optimisation video\\'+str(self.frame_number)+'.png', dpi = 200)
 
             self.memberlengths = self.all_points[self.working_lattice[:,1],:] - self.all_points[self.working_lattice[:,0],:]
             self.total_length = np.sum(np.sqrt((self.memberlengths**2).sum(axis=1)))
@@ -496,8 +483,8 @@ class main():
                     self.ax.plot(self.end_location[0],self.end_location[1])
                     self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]],c = 'red')
                     self.ax.add_line(self.line)
-                self.start_location  = self.all_points[int(self.valid_changes[self.index_min_cost,0])]
-                self.end_location  = self.all_points[int(self.valid_changes[self.index_min_cost,1])]
+                self.start_location = self.all_points[int(self.valid_changes[self.index_min_cost,0])]
+                self.end_location = self.all_points[int(self.valid_changes[self.index_min_cost,1])]
                 self.ax.plot(self.start_location[0],self.start_location[1])
                 self.ax.plot(self.end_location[0],self.end_location[1])
                 self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]], c='pink')
@@ -583,14 +570,7 @@ class main():
         for sp in ax.spines.values():
             sp.set_visible(False)
 
-    def Remove_extranious_members(self):
-        '''The ontimised lattice has a few pointless members, we can remove these to imporve the optimisation'''
-        pass
-
-
     def mainloop(self):
-
-        self.start_time = time.time()
         self.foil = self.gen_naca(self.foil_number)
         self.third_chord = self.find_chamber_point(0.3, self.foil)
         self.three_quater_chord = self.find_chamber_point(0.6, self.foil)
@@ -599,6 +579,20 @@ class main():
                                                             np.array([[ self.three_quater_chord[0]*300+5*np.cos(theta), self.three_quater_chord[1]*300+5*np.sin(theta)] for theta in np.linspace(0, 2*np.pi,20)])[:-1]]))
         self.all_points = self.all_points.astype(np.float64)
         self.forces = self.Generate_loading_data(self.foil, 0.2)
+        '''Pre-processing as much as possible'''
+        self.DOFCON = np.ones_like(self.all_points).astype(int)
+        self.Ur = []
+        self.Forces = np.zeros_like(self.all_points)
+        for index in range(self.bounding_polygon_indecies[0], self.bounding_polygon_indecies[1]+1):
+            self.Forces[index,:] = self.forces[index-self.bounding_polygon_indecies[1]]
+        for indexs in self.hole_node_indecies:
+            for i in range(indexs[0], indexs[1]+1):
+                self.DOFCON[i,:] = 0
+                self.Ur.append(0)
+                self.Ur.append(0)
+
+        self.freeDOF = self.DOFCON.flatten().nonzero()[0]
+        self.Pf = self.Forces.flatten()[self.freeDOF]
 
         self.NN = len(self.all_points)          #Number of nodes
         self.NDOF = self.DOF*self.NN            #Total number of degree of freedom
