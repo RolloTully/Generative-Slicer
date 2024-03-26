@@ -24,11 +24,12 @@ from shapely.geometry import Point, LineString, Polygon
 from tqdm import tqdm
 import cProfile
 import cupy as cy
+from scipy.sparse.linalg import spsolve
 
 
 class main():
     def __init__(self):
-        self.grid_resolution = 10#mm
+        self.grid_resolution = 5#mm
         self.Flow_Velocity = 20
         self.Angle_of_Attack = 5
         self.foil_number = '2412'
@@ -354,7 +355,7 @@ class main():
             self.Global_Stiffness[np.ix_(self.indecies,self.indecies)] = self.Global_Stiffness[np.ix_(self.indecies,self.indecies)] + self.ES
         self.supportDOF = (self.DOFCON.flatten() == 0).nonzero()[0]
         self.Kff = self.Global_Stiffness[np.ix_(self.freeDOF,self.freeDOF)]
-        self.Uf = np.linalg.solve(self.Kff,self.Pf)
+        self.Uf = cy.linalg.solve(cy.asarray(self.Kff.todense()),cy.asarray(self.Pf)).get()
         self.U = self.DOFCON.astype(float).flatten()
         self.U[self.freeDOF] = self.Uf
         self.U[self.supportDOF] = self.Ur
@@ -379,9 +380,6 @@ class main():
         while not self.halt:
             self.frame_number +=1
             '''we must check that there arent any 'deadlegs' in the lattice, these cause large displacments that trips the stopping condition without contributing to its strength'''
-            self.Truss_Analysis(False)
-
-
             #'''Making a video of the optimisation'''
             #self.Strain = self.displaced_s_length-self.original_s_length
             #self.min_strain = np.min(self.Strain)
@@ -411,16 +409,23 @@ class main():
             self.valid_changes = []
             for connection in self.working_lattice:
                 self.valid = True
-                if not (connection[0] or connection[1]) in range(self.bounding_polygon_indecies[0],self.bounding_polygon_indecies[1]+1):
+                if not (connection[0] and connection[1]) in range(self.bounding_polygon_indecies[0],self.bounding_polygon_indecies[1]+1):
                     for hole in self.hole_node_indecies:
-                        if not (connection[0] or connection[1]) in range(hole[0],hole[1]+1):
-                            pass
-                        else:
-                            self.valid = False
-                else:
-                    self.valid = False
-                if self.valid:
-                    self.valid_changes.append(connection)
+                        if not (connection[0] and connection[1]) in range(hole[0],hole[1]+1):
+                            self.valid_changes.append(connection)
+
+
+            #self.fig = plt.figure()
+            #self.ax = self.fig.add_subplot(111)
+            #for i, connection in enumerate(self.valid_changes):
+            #    self.start_location  = self.all_points[int(connection[0])]
+            #    self.end_location  = self.all_points[int(connection[1])]
+            #    self.ax.plot(self.start_location[0],self.start_location[1])
+            #    self.ax.plot(self.end_location[0],self.end_location[1])
+            #    self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]])
+            #    self.ax.add_line(self.line)
+            #plt.gca().set_aspect('equal')
+            #plt.show()
 
             if self.valid_changes == []:
                 self.output_lattice = self.working_lattice
@@ -430,7 +435,6 @@ class main():
             self.indexes = []
             for valid_change in self.valid_changes:
                 self.indexes.append(np.where(np.all(self.current_connections == valid_change, axis=1))[0])
-            print("We here")
             for self.index in tqdm(self.indexes):
                 try:
                     self.filtered_connections = np.delete(self.working_lattice, self.index,0)
@@ -505,7 +509,7 @@ class main():
                 plt.title("Grid of valid changes")
                 plt.gca().set_aspect('equal')
                 plt.show(block=False)
-                plt.pause(0.5)
+                plt.pause(1)
                 plt.close()
 
 
