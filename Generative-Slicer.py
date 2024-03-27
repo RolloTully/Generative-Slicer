@@ -25,11 +25,13 @@ from tqdm import tqdm
 import cProfile
 import cupy as cy
 from scipy.sparse.linalg import spsolve
+from pathos.pools import ParallelPool
+from scipy.linalg import lstsq
 
 
 class main():
     def __init__(self):
-        self.grid_resolution = 10#mm
+        self.grid_resolution = 15#mm
         self.Flow_Velocity = 20
         self.Angle_of_Attack = 5
         self.foil_number = '2412'
@@ -325,9 +327,10 @@ class main():
         return self.node_loads
 
     def Truss_Analysis(self, connections):
+
         '''This thing works, dont touch it, its basicly black magic'''
-        self.NE = len(self.filtered_connections)           #Number of bars
-        self.d = self.all_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
+        self.NE = len(connections)           #Number of bars
+        self.d = self.all_points[connections[:,1],:] - self.all_points[connections[:,0],:]
         self.length = np.sqrt((np.square(self.d)).sum(axis=1))
         self.theta = self.d.T/self.length
         self.a = np.concatenate((-self.theta.T,self.theta.T), axis=1)
@@ -336,7 +339,7 @@ class main():
         self.Global_Stiffness = np.zeros([self.NDOF,self.NDOF])
         '''Now parsing over each element to add the mto the global stiffness matrix'''
         for index in range(self.NE):
-            self.aux  = 3*self.filtered_connections[index,:]
+            self.aux  = 3*connections[index,:]
             self.indecies = np.r_[self.aux[0]:self.aux[0]+3,self.aux[1]:self.aux[1]+3]
             self.k = ((self.E*self.A)/self.length[index])
             self.transformation_matrix = np.zeros((6,6))
@@ -361,9 +364,12 @@ class main():
         self.U[self.supportDOF] = self.Ur
         self.U = self.U.reshape(self.NN,self.DOF)[:,0:2]
         self.Displacement_points = self.all_points+self.U
-        self.new_d = self.Displacement_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
+        self.new_d = self.Displacement_points[connections[:,1],:] - self.all_points[connections[:,0],:]
         self.new_length = np.sqrt((self.new_d**2).sum(axis=1))
         self.d_length = self.length-self.new_length
+        return np.sum(np.abs(self.d_length))
+
+        #return self.U, self.d_length
 
     def Optimise(self, verbose = True):
         '''Not all members can be removed, we must find the array of memebers that we can remove with out the k-matrix becoming singular'''
@@ -379,31 +385,14 @@ class main():
         self.working_lattice = self.filtered_connections.copy()
         while not self.halt:
             self.frame_number +=1
+            print("Frame Number: " +str(self.frame_number))
             '''we must check that there arent any 'deadlegs' in the lattice, these cause large displacments that trips the stopping condition without contributing to its strength'''
             '''Making a video of the optimisation'''
-            self.Truss_Analysis(False)
+            self.Truss_Analysis(self.working_lattice)
             self.Strain = self.displaced_s_length-self.original_s_length
             self.min_strain = np.min(self.Strain)
             self.max_strain = np.max(self.Strain)
             self.strain_range = self.max_strain-self.min_strain
-
-            self.fig = plt.figure()
-            self.ax = self.fig.add_subplot(111)
-            self.Displacement_points = self.all_points+self.U
-            for i, connection in enumerate(self.working_lattice):
-                self.index_strain = self.Strain[i]
-                self.colour_encoding = (self.index_strain-self.min_strain)/self.strain_range
-                self.colour = self.cmap(self.colour_encoding)
-                self.start_location  = self.Displacement_points[int(connection[0])]
-                self.end_location  = self.Displacement_points[int(connection[1])]
-                self.ax.plot(self.start_location[0],self.start_location[1])
-                self.ax.plot(self.end_location[0],self.end_location[1])
-                self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]],c = self.colour)
-                self.ax.add_line(self.line)
-            plt.title("Deformed Airfoil shape(x1000), NACA 2412, 5 Degrees, 20 ms^-1")
-            plt.gca().set_aspect('equal')
-            plt.savefig('C:\\Users\\rollo\\Documents\\GitHub\\Generative-Slicer\\Optimisation video\\'+str(self.frame_number)+'.png', dpi = 200)
-            plt.close()
             self.memberlengths = self.all_points[self.working_lattice[:,1],:] - self.all_points[self.working_lattice[:,0],:]
             self.total_length = np.sum(np.sqrt((self.memberlengths**2).sum(axis=1)))
             self.Structure_Mass.append(self.total_length/self.original_total_length)
@@ -441,18 +430,15 @@ class main():
 
             self.costs = []
             self.indexes = []
+            self.mesh_options = []
             for valid_change in self.valid_changes:
-                self.indexes.append(np.where(np.all(self.working_lattice == valid_change, axis=1))[0])
-            for self.index in tqdm(self.indexes):
-                try:
-                    self.filtered_connections = np.delete(self.working_lattice, self.index,0)
-                    self.Truss_Analysis(False)
-                    self.costs.append(np.max(np.abs(self.d_length)))
-                except:
-                    self.costs.append(1e9)
-                    pass
-                #print("Removing member ", self.index," this is ",self.current_connections[self.index]," this has a cost of ",np.sum(self.d_length))
-            self.index_min_cost = np.argmin(self.costs)
+                #self.indexes.append(np.where(np.all(self.working_lattice == valid_change, axis=1))[0])
+                #print(np.where(np.all(self.working_lattice == valid_change, axis=1))[0][0])
+                #input()
+                self.mesh_options.append( np.delete(self.working_lattice, np.where(np.all(self.working_lattice == valid_change, axis=1))[0][0],0))
+
+            self.costs = [self.Truss_Analysis(mesh) for mesh in tqdm(self.mesh_options)]
+            self.index_min_cost = np.nanargmin(self.costs)
             #print(self.costs)
             self.cost = self.costs[self.index_min_cost]
             print("minimum cost index: ", self.index_min_cost, " Cost: ", self.cost)
@@ -460,24 +446,60 @@ class main():
                 self.output_lattice = self.working_lattice
                 self.halt = True
             else:
-                self.working_lattice = np.delete(self.working_lattice, self.indexes[self.index_min_cost],0)
+                self.working_lattice = self.mesh_options[self.index_min_cost]#np.delete(self.working_lattice, self.indexes[self.index_min_cost],0)
                 self.valid_changes = np.array(self.valid_changes)
                 self.Structure_total_displacment.append(np.sum(np.abs(self.d_length)))
                 self.Peak_displacment.append(np.max(np.abs(self.d_length)))
-            #'''Floppy Member removal'''
-            #print("and We here")
-            #self.points, self.counts = np.unique(self.current_connections.flatten(), return_counts=True)
-            #print(np.count_nonzero(self.counts==1))
-            #while 1 in self.counts:
-            #    self.points, self.counts = np.unique(self.current_connections.flatten(), return_counts=True)
-            #    print(self.counts)
-            #    self.extranious_memeber_end = self.points[np.argmin(self.counts)]
-            #    print("Member end ", self.extranious_memeber_end)
-            #    '''We must now remove any memebrs containing this point'''
-            #    self.members_to_remove = np.where(self.current_connections == self.extranious_memeber_end)
-            #    print("member index ", self.members_to_remove)
-            #    print("Member ", self.current_connections[self.members_to_remove[0]])
-            #    self.current_connections = np.delete(self.current_connections, self.members_to_remove[0],0)
+            self.fig = plt.figure()
+            self.ax = self.fig.add_subplot(111)
+            self.Displacement_points = self.all_points+self.U*1000
+            for i, connection in enumerate(self.working_lattice):
+                self.index_strain = self.Strain[i]
+                self.colour_encoding = (self.index_strain-self.min_strain)/self.strain_range
+                self.colour = self.cmap(self.colour_encoding)
+                self.start_location  = self.Displacement_points[int(connection[0])]
+                self.end_location  = self.Displacement_points[int(connection[1])]
+                self.ax.plot(self.start_location[0],self.start_location[1])
+                self.ax.plot(self.end_location[0],self.end_location[1])
+                self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]],c = self.colour)
+                self.ax.add_line(self.line)
+            plt.title("Deformed Airfoil shape(x1000), NACA 2412, 5 Degrees, 20 ms^-1")
+            plt.gca().set_aspect('equal')
+            plt.savefig('C:\\Users\\rollo\\Documents\\GitHub\\Generative-Slicer\\Optimisation video\\'+str(self.frame_number)+'.png', dpi = 200)
+            plt.close()
+
+            '''Floppy Member removal'''
+            self.points, self.counts = np.unique(self.working_lattice.flatten(), return_counts=True)
+            while 1 in self.counts:
+                self.points, self.counts = np.unique(self.working_lattice.flatten(), return_counts=True)
+                print(self.counts)
+                self.extranious_memeber_end = self.points[np.argmin(self.counts)]
+                print("Member end ", self.extranious_memeber_end)
+                '''We must now remove any memebrs containing this point'''
+                self.members_to_remove = np.where(self.working_lattice == self.extranious_memeber_end)
+                print("member index ", self.members_to_remove)
+                print("Member ", self.current_connections[self.members_to_remove[0]])
+                self.working_lattice = np.delete(self.working_lattice, self.members_to_remove[0],0)
+                self.frame_number+=1
+                print("Frame Number: " +str(self.frame_number))
+                self.fig = plt.figure()
+                self.ax = self.fig.add_subplot(111)
+                self.Displacement_points = self.all_points+self.U*1000
+                for i, connection in enumerate(self.working_lattice):
+                    self.index_strain = self.Strain[i]
+                    self.colour_encoding = (self.index_strain-self.min_strain)/self.strain_range
+                    self.colour = self.cmap(self.colour_encoding)
+                    self.start_location  = self.Displacement_points[int(connection[0])]
+                    self.end_location  = self.Displacement_points[int(connection[1])]
+                    self.ax.plot(self.start_location[0],self.start_location[1])
+                    self.ax.plot(self.end_location[0],self.end_location[1])
+                    self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]],c = self.colour)
+                    self.ax.add_line(self.line)
+                plt.title("Deformed Airfoil shape(x1000), NACA 2412, 5 Degrees, 20 ms^-1")
+                plt.gca().set_aspect('equal')
+                plt.savefig('C:\\Users\\rollo\\Documents\\GitHub\\Generative-Slicer\\Optimisation video\\'+str(self.frame_number)+'.png', dpi = 200)
+                plt.close()
+
 
 
 
@@ -618,7 +640,7 @@ class main():
         self.Pf = self.Forces.flatten()[self.freeDOF]
         self.NN = len(self.all_points)          #Number of nodes
         self.NDOF = self.DOF*self.NN            #Total number of degree of freedom
-        self.Truss_Analysis(True)
+        self.Truss_Analysis(self.filtered_connections)
         self.Displacement_points = self.all_points+self.U*1000
         self.original_memberlengths = self.all_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
         self.original_s_length = np.sum(np.sqrt((self.original_memberlengths**2).sum(axis=1)))
