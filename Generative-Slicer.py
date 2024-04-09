@@ -17,7 +17,7 @@ from scipy.sparse.linalg import spsolve
 
 class main():
     def __init__(self):
-        self.grid_resolution = 2#mm
+        self.grid_resolution = 10#mm
         self.Flow_Velocity = 100
         self.Angle_of_Attack = 20
         self.foil_number = '2412'
@@ -832,48 +832,42 @@ class main():
         self.strain_range = self.max_strain-self.min_strain
         self.cmap = plt.cm.get_cmap('turbo')
         self.Optimise(False)
-
-
-
-
-
-
-            '''Live Plotting'''
-            if False:
-                '''Process Logging'''
-                print("____________________________________________________________________________________")
-                print(len(self.valid_changes), "Valid changes can be made.")
-                print("Removing the ", self.index_min_cost, "Member results in the least deformation.")
-                print("This is connection ",self.indexes[self.index_min_cost])
-                print("The New minimum cost is ",self.cost)
-                print("The Current maximum deformation is ", np.max(np.abs(self.d_length)))
-                self.fig = plt.figure()
-                self.ax = self.fig.add_subplot(111)
-                for connection in self.working_lattice:
-                    self.start_location  = self.all_points[int(connection[0])]
-                    self.end_location  = self.all_points[int(connection[1])]
-                    self.ax.plot(self.start_location[0],self.start_location[1])
-                    self.ax.plot(self.end_location[0],self.end_location[1])
-                    self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]], c='blue')
-                    self.ax.add_line(self.line)
-                #for connection in self.valid_changes:
-                #    self.start_location  = self.all_points[int(connection[0])]
-                #    self.end_location  = self.all_points[int(connection[1])]
-                #    self.ax.plot(self.start_location[0],self.start_location[1])
-                #    self.ax.plot(self.end_location[0],self.end_location[1])
-                #    self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]],c = 'red')
-                #    self.ax.add_line(self.line)
-                self.start_location = self.all_points[int(self.valid_changes[self.index_min_cost,0])]
-                self.end_location = self.all_points[int(self.valid_changes[self.index_min_cost,1])]
+        '''Live Plotting'''
+        if False:
+            '''Process Logging'''
+            print("____________________________________________________________________________________")
+            print(len(self.valid_changes), "Valid changes can be made.")
+            print("Removing the ", self.index_min_cost, "Member results in the least deformation.")
+            print("This is connection ",self.indexes[self.index_min_cost])
+            print("The New minimum cost is ",self.cost)
+            print("The Current maximum deformation is ", np.max(np.abs(self.d_length)))
+            self.fig = plt.figure()
+            self.ax = self.fig.add_subplot(111)
+            for connection in self.working_lattice:
+                self.start_location  = self.all_points[int(connection[0])]
+                self.end_location  = self.all_points[int(connection[1])]
                 self.ax.plot(self.start_location[0],self.start_location[1])
                 self.ax.plot(self.end_location[0],self.end_location[1])
-                self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]], c='pink')
+                self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]], c='blue')
                 self.ax.add_line(self.line)
-                plt.title("Grid of valid changes")
-                plt.gca().set_aspect('equal')
-                plt.show(block=False)
-                plt.pause(5)
-                plt.close()
+            #for connection in self.valid_changes:
+            #    self.start_location  = self.all_points[int(connection[0])]
+            #    self.end_location  = self.all_points[int(connection[1])]
+            #    self.ax.plot(self.start_location[0],self.start_location[1])
+            #    self.ax.plot(self.end_location[0],self.end_location[1])
+            #    self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]],c = 'red')
+            #    self.ax.add_line(self.line)
+            self.start_location = self.all_points[int(self.valid_changes[self.index_min_cost,0])]
+            self.end_location = self.all_points[int(self.valid_changes[self.index_min_cost,1])]
+            self.ax.plot(self.start_location[0],self.start_location[1])
+            self.ax.plot(self.end_location[0],self.end_location[1])
+            self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]], c='pink')
+            self.ax.add_line(self.line)
+            plt.title("Grid of valid changes")
+            plt.gca().set_aspect('equal')
+            plt.show(block=False)
+            plt.pause(5)
+            plt.close()
 
 
         '''Plotting Stuff'''
@@ -1165,7 +1159,8 @@ class main():
         pass
 
     def mainloop(self):
-        self.Fast_Optimisation()
+        self.Single_Run()
+        #self.Fast_Optimisation()
         #self.Mesh_Angle_Study()
 
 
