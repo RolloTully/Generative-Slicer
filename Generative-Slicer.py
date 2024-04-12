@@ -14,12 +14,95 @@ import numpy as np
 from shapely.geometry import Point, LineString, Polygon
 import cupy as cy
 from scipy.sparse.linalg import spsolve
+import networkx as nx
+
+class Printer():
+    def __init__(self):
+        self.Dimensions = [250,250,250]#Dimensions in mm
+        self.Speed = 60#mm/min
+        self.Filament_Diamiter = 1.75#mm
+        self.Nozzle_Diamiter = 0.4#mm
+        self.Flow_Factor = ((self.Filament_Diamiter/2)**2)/((self.Nozzle_Diamiter)**2)
+        self.extrusion_factor = 0.04
+        self.bed_size = np.array([220,220,250])
+        self.serial_port = serial.Serial('COM18',115200)
+        time.sleep(2)
+        self.Ready()
+    def prime(self):
+        self.cmds = ["G0 X2 Y2 Z0.2\r\n",
+                     "G1 E7.92 X2 Y200 Z0.2\r\n",
+                     "G1 E7.92 X2.1 Y2 Z0.2\r\n",
+                     "G0 X2 Y2 Z10\r\n"]
+        for cmd in self.cmds:
+            self.serial_port.write(cmd.encode())
+            self.waittillready()
+        time.sleep(3)
+    def home(self):
+        self.serial_port.write("G28\r\n".encode())
+    def retract(self):
+        self.cmd = ["G1 E-25\r\n"]
+        for cmd in self.cmds:
+            self.serial_port(cmd.encode())
+    def goto(self, pos):
+        print("Going to ", pos)
+        self.command = "G0 X"+str(pos[0])+" Y"+str(pos[1])+" Z"+str(pos[2])+"\r\n"
+        self.serial_port.write(self.command.encode())#
+        self.waittillready()
+    def extrudeto(self, x,y,z,e):
+        self.command = "G1 E"+str(e)+" X"+str(x)+" Y"+str(y)+" Z"+str(z)+"\r\n"
+        self.serial_port.write(self.command.encode())
+        self.waittillready()
+    def waittillready(self):
+        while True:
+            if self.serial_port.read_until() == b'ok\n':
+                break
+    def setNozzleTemperature(self, T):
+        print("Extruder heating to "+str(T)+" degrees.")
+        self.cmd = "M109 S"+str(T)+"\r\n"
+        self.serial_port.write(self.cmd.encode())
+        self.waittillready()
+        print("Extruder heated.")
+    def setBedTemperature(self, T):
+        print("Bed heating to "+str(T)+" degrees.")
+        self.cmd = "M190 S"+str(T)+"\r\n"
+        self.serial_port.write(self.cmd.encode())
+        self.waittillready()
+        print("Bed heated.")
+    def setRelExtrusion(self):
+        self.cmd = "M83\r\n"
+        self.serial_port.write(self.cmd.encode())
+        self.waittillready()
+    def setRelMotion(self):
+        self.cmd = "G91\r\n"
+        self.serial_port.write(self.cmd.encode())
+        self.waittillready()
+    def setAbsMotion(self):
+        self.cmd = "G90\r\n"
+        self.serial_port.write(self.cmd.encode())
+        self.waittillready()
+        self.setRelExtrusion()
+    def Ready(self):
+        self.home()
+        self.setRelExtrusion()
+        self.setNozzleTemperature(260)
+        self.setBedTemperature(60)
+        self.prime()
+        self.waittillready()
+    def print(self, layers):
+        for layer in layers:#this is each vertical slice
+            for element in layer:#this is each contrinious line
+                self.goto(element[0])
+                for index in range(1, len(element)-1):#this is is each point in the line
+                    self.diff = [element[index][0]-element[index-1][0], element[index][1]-element[index-1][1]]
+                    self.extrusion_distance = round(np.hypot(self.diff[0],self.diff[1])*self.extrusion_factor,5)
+                    print(element[index][0],element[index][1],element[index][2],self.extrusion_distance)
+                    self.extrudeto(element[index][0],element[index][1],element[index][2],self.extrusion_distance)
 
 class main():
     def __init__(self):
         self.grid_resolution = 10#mm
-        self.Flow_Velocity = 100
-        self.Angle_of_Attack = 20
+        self.Flow_Velocity = 50
+        self.Angle_of_Attack = 5
         self.foil_number = '2412'
         self.DOF = 3                  #2D Truss
         self.E = 4.107e9
@@ -27,6 +110,8 @@ class main():
         self.G = 0.35e5
         self.frame_number = 0
         self.Flextural_Strain_limit = 0.017
+        self.Deformation_Amplifaction_factor = 100
+        self.Reynolds = 1e5#(1.225*self.Flow_Velocity*0.3)/1.81e-5
         self.mainloop()
     def resample(self, surface_,  samples):
         '''resamples the foil at a higher density'''
@@ -290,7 +375,7 @@ class main():
         for line in foil:
             self.output_file.write("     "+str(format(line[0],'.6f'))+"    "+str(format(line[1],'.6f'))+"\n")#
         self.output_file.close()
-        self.Data = xf.find_pressure_coefficients(self.foil_name, self.Angle_of_Attack,Reynolds = 100e6, iteration=200, NACA=False)
+        self.Data = xf.find_pressure_coefficients(self.foil_name, self.Angle_of_Attack,Reynolds = self.Reynolds, iteration=200, NACA=False)
         return self.Data
 
     def Generate_loading_data(self, foil, layer_thickness):
@@ -322,8 +407,6 @@ class main():
         self.length = np.sqrt((np.square(self.d)).sum(axis=1))
         self.theta = self.d.T/self.length
         self.a = np.concatenate((-self.theta.T,self.theta.T), axis=1)
-        #print(self.a)
-
         self.Global_Stiffness = np.zeros([self.NDOF,self.NDOF])
         '''Now parsing over each element to add the mto the global stiffness matrix'''
         for index in range(self.NE):
@@ -460,7 +543,7 @@ class main():
 
             self.fig = plt.figure()
             self.ax = self.fig.add_subplot(111)
-            self.Displacement_points = self.all_points+self.U*500
+            self.Displacement_points = self.all_points+self.U*self.Deformation_Amplifaction_factor
             for i, connection in enumerate(self.working_lattice):
                 self.index_strain = self.Strain[i]
                 self.colour_encoding = (self.index_strain-self.min_strain)/self.strain_range
@@ -471,7 +554,7 @@ class main():
                 self.ax.plot(self.end_location[0],self.end_location[1])
                 self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]],c = self.colour)
                 self.ax.add_line(self.line)
-            plt.title("Deformed Airfoil shape(x100), NACA 2412, 5 Degrees, 20 ms^-1")
+            plt.title("Deformed Airfoil shape(x"+str(self.Deformation_Amplifaction_factor)+"), NACA"+str(self.foil_num)+", "+str(self.Angle_of_Attack)+" Degrees, "+str(self.Flow_Velocity)+" ms^-1")
             plt.gca().set_aspect('equal')
             plt.savefig('C:\\Users\\rollo\\Documents\\GitHub\\Generative-Slicer\\Optimisation video\\'+str(self.frame_number)+'.png', dpi = 100)
             plt.close()
@@ -573,18 +656,6 @@ class main():
             if self.valid_changes == []:
                 self.output_lattice = self.working_lattice
                 break
-
-            #'''Removing elements of minimum strain'''
-            #self.index_minimum_strain = np.nanargsort(self.Strain)
-
-
-
-
-
-
-
-
-
             self.costs = []
             self.indexes = []
             self.mesh_options = []
@@ -594,9 +665,6 @@ class main():
             self.index_min_cost = np.nanargmin(self.costs)
             self.cost = self.costs[self.index_min_cost]
             self.Truss_Analysis(self.mesh_options[self.index_min_cost])
-            #print(self.costs)
-            #print("minimum cost index: ", self.index_min_cost, " Cost: ", self.cost)
-            #print("Maximum elongation",np.max(np.abs(self.d_length)))
             if np.max(np.abs(self.d_length)) >self.Flextural_Strain_limit:
                 self.output_lattice = self.working_lattice
                 self.halt = True
@@ -605,10 +673,9 @@ class main():
                 self.valid_changes = np.array(self.valid_changes)
                 self.Structure_total_displacment.append(np.sum(np.abs(self.d_length)))
                 self.Peak_displacment.append(np.max(np.abs(self.d_length)))
-
             self.fig = plt.figure()
             self.ax = self.fig.add_subplot(111)
-            self.Displacement_points = self.all_points+self.U*500
+            self.Displacement_points = self.all_points+self.U#*500
             for i, connection in enumerate(self.working_lattice):
                 self.index_strain = self.Strain[i]
                 self.colour_encoding = (self.index_strain-self.min_strain)/self.strain_range
@@ -619,173 +686,79 @@ class main():
                 self.ax.plot(self.end_location[0],self.end_location[1])
                 self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]],c = self.colour)
                 self.ax.add_line(self.line)
-            plt.title("Deformed Airfoil shape(x100), NACA 2412, 5 Degrees, 20 ms^-1")
+            plt.title("Deformed Airfoil shape(x"+str(self.Deformation_Amplifaction_factor)+"), NACA"+str(self.foil_num)+", "+str(self.Angle_of_Attack)+" Degrees, "+str(self.Flow_Velocity)+" ms^-1")
             plt.gca().set_aspect('equal')
             plt.savefig('C:\\Users\\rollo\\Documents\\GitHub\\Generative-Slicer\\Optimisation video\\'+str(self.frame_number)+'.png', dpi = 100)
             plt.close()
+        print("Optimised Mass ratio")
+        print(self.total_length/self.original_total_length)
+        '''Plotting Stuff'''
 
-            #'''Floppy Member removal'''
-            #self.points, self.counts = np.unique(self.working_lattice.flatten(), return_counts=True)
-            #while 1 in self.counts:
-            #    self.fig = plt.figure()
-            #    self.ax = self.fig.add_subplot(111)
-            #    self.Displacement_points = self.all_points+self.U*1000
-            #    for i, connection in enumerate(self.working_lattice):
-            #        self.start_location  = self.Displacement_points[int(connection[0])]
-            #        self.end_location  = self.Displacement_points[int(connection[1])]
-            #        self.ax.annotate(str(connection[0]), (self.start_location[0],self.start_location[1]))
-            #        self.ax.annotate(str(connection[1]), (self.end_location[0],self.end_location[1]))
-            #        self.ax.plot(self.start_location[0],self.start_location[1])
-            #        self.ax.plot(self.end_location[0],self.end_location[1])
-            #        self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]])
-            #        self.ax.add_line(self.line)
-            #    plt.title("Deformed Airfoil shape(x1000), NACA 2412, 5 Degrees, 20 ms^-1")
-            #    plt.gca().set_aspect('equal')
-            #    plt.show()
+        '''Floppy Member removal'''
+        print("The final lattice containts this many members")
+        print(len(self.output_lattice))
+        self.points, self.counts = np.unique(self.output_lattice.flatten(), return_counts=True)
+        while 1 in self.counts:
+            print(self.counts)
+            print(np.argmin(self.counts))
+            self.extranious_memeber_end = self.points[np.argmin(self.counts)]
+            print("Member end ", self.extranious_memeber_end)
+            '''We must now remove any memebrs containing this point'''
+            self.members_to_remove = np.where(self.output_lattice == self.extranious_memeber_end)
+            print("member index ", self.members_to_remove)
+            print("Member ", self.output_lattice[self.members_to_remove[0]])
+            print(self.working_lattice.shape)
 
-            #    print(self.counts)
-            #    print(np.argmin(self.counts))
-            #    self.extranious_memeber_end = self.points[np.argmin(self.counts)]
-            #    print("Member end ", self.extranious_memeber_end)
-            #    '''We must now remove any memebrs containing this point'''
-            #    self.members_to_remove = np.where(self.working_lattice == self.extranious_memeber_end)
-            #    print("member index ", self.members_to_remove)
-            #    print("Member ", self.working_lattice[self.members_to_remove[0]])
-            #    print(self.working_lattice.shape)
-
-            #    self.working_lattice = np.delete(self.working_lattice, self.members_to_remove[0],0)
-            #    self.points, self.counts = np.unique(self.working_lattice.flatten(), return_counts=True)
-            #    print(self.working_lattice.shape)
-            #    input("pausing here")
-            #    self.frame_number+=1
-            #    print("Frame Number: " +str(self.frame_number))
-            #    self.fig = plt.figure()
-            #    self.ax = self.fig.add_subplot(111)
-            #    self.Displacement_points = self.all_points+self.U*1000
-            #    for i, connection in enumerate(self.working_lattice):
-            #        self.start_location  = self.Displacement_points[int(connection[0])]
-            #        self.end_location  = self.Displacement_points[int(connection[1])]
-            #        self.ax.annotate(str(connection[0]), (self.start_location[0],self.start_location[1]))
-            #        self.ax.annotate(str(connection[1]), (self.end_location[0],self.end_location[1]))
-            #        self.ax.plot(self.start_location[0],self.start_location[1])
-            #        self.ax.plot(self.end_location[0],self.end_location[1])
-            #        self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]])
-            #        self.ax.add_line(self.line)
-            #    plt.title("Deformed Airfoil shape(x1000), NACA 2412, 5 Degrees, 20 ms^-1")
-            #    plt.gca().set_aspect('equal')
-            #    plt.show()
-            #    #plt.savefig('C:\\Users\\rollo\\Documents\\GitHub\\Generative-Slicer\\Optimisation video\\'+str(self.frame_number)+'.png', dpi = 200)
-            #    #plt.close()
-
-
-
-
-            '''Live Plotting'''
-            if False:
-                '''Process Logging'''
-                print("____________________________________________________________________________________")
-                print(len(self.valid_changes), "Valid changes can be made.")
-                print("Removing the ", self.index_min_cost, "Member results in the least deformation.")
-                print("This is connection ",self.indexes[self.index_min_cost])
-                print("The New minimum cost is ",self.cost)
-                print("The Current maximum deformation is ", np.max(np.abs(self.d_length)))
-                self.fig = plt.figure()
-                self.ax = self.fig.add_subplot(111)
-                for connection in self.working_lattice:
-                    self.start_location  = self.all_points[int(connection[0])]
-                    self.end_location  = self.all_points[int(connection[1])]
-                    self.ax.plot(self.start_location[0],self.start_location[1])
-                    self.ax.plot(self.end_location[0],self.end_location[1])
-                    self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]], c='blue')
-                    self.ax.add_line(self.line)
-                #for connection in self.valid_changes:
-                #    self.start_location  = self.all_points[int(connection[0])]
-                #    self.end_location  = self.all_points[int(connection[1])]
-                #    self.ax.plot(self.start_location[0],self.start_location[1])
-                #    self.ax.plot(self.end_location[0],self.end_location[1])
-                #    self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]],c = 'red')
-                #    self.ax.add_line(self.line)
-                self.start_location = self.all_points[int(self.valid_changes[self.index_min_cost,0])]
-                self.end_location = self.all_points[int(self.valid_changes[self.index_min_cost,1])]
+            self.output_lattice = np.delete(self.output_lattice, self.members_to_remove[0],0)
+            self.points, self.counts = np.unique(self.output_lattice.flatten(), return_counts=True)
+            print(self.working_lattice.shape)
+            #input("pausing here")
+            self.frame_number+=1
+            print("Frame Number: " +str(self.frame_number))
+            self.fig = plt.figure()
+            self.ax = self.fig.add_subplot(111)
+            self.Displacement_points = self.all_points+self.U
+            for i, connection in enumerate(self.output_lattice):
+                self.start_location  = self.Displacement_points[int(connection[0])]
+                self.end_location  = self.Displacement_points[int(connection[1])]
+                #self.ax.annotate(str(connection[0]), (self.start_location[0],self.start_location[1]))
+                #self.ax.annotate(str(connection[1]), (self.end_location[0],self.end_location[1]))
                 self.ax.plot(self.start_location[0],self.start_location[1])
                 self.ax.plot(self.end_location[0],self.end_location[1])
-                self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]], c='pink')
+                self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]])
                 self.ax.add_line(self.line)
-                plt.title("Grid of valid changes")
-                plt.gca().set_aspect('equal')
-                plt.show(block=False)
-                plt.pause(5)
-                plt.close()
+            plt.title("Deformed Airfoil shape(x"+str(self.Deformation_Amplifaction_factor)+"), NACA"+str(self.foil_num)+", "+str(self.Angle_of_Attack)+" Degrees, "+str(self.Flow_Velocity)+" ms^-1")
+            plt.gca().set_aspect('equal')
+            #plt.show()
+            plt.savefig('C:\\Users\\rollo\\Documents\\GitHub\\Generative-Slicer\\Optimisation video\\'+str(self.frame_number)+'.png', dpi = 200)
+            plt.close()
+        self.fig,self.ax = plt.subplots()
+        plt.grid()
+        self.color = 'tab:red'
+        self.ax.set_ylim(0,1.1)
+        self.ax.plot(np.array(self.Structure_Mass), color = self.color, linewidth = 3.0)
+        self.ax.set_xlabel("Iterations", fontsize=20)
+        self.ax.set_ylabel("Volume Fraction (%)", color = self.color, fontsize=20)
+        self.ax.tick_params(axis='y',labelcolor = self.color)
 
+        self.ax2 = self.ax.twinx()  # instantiate a second axes that shares the same x-axis
+        self.color = 'tab:blue'
+        self.ax2.set_ylabel('Total Structual Displacment(mm)', color = self.color, fontsize=20)  # we already handled the x-label with ax1
+        self.ax2.plot(self.Structure_total_displacment, color = self.color, linewidth = 3.0)
+        self.ax2.yaxis.tick_right()
+        self.ax2.yaxis.set_label_position("right")
+        self.ax2.tick_params(axis='y',labelcolor = self.color)
 
-        '''Plotting Stuff'''
-        #self.fig,self.ax = plt.subplots()
-        #plt.grid()
-        #self.color = 'tab:red'
-        #self.ax.set_ylim(0,1.1)
-        #self.ax.plot(np.array(self.Structure_Mass), color = self.color, linewidth = 3.0)
-        #self.ax.set_xlabel("Iterations", fontsize=20)
-        #self.ax.set_ylabel("Volume Fraction (%)", color = self.color, fontsize=20)
-        #self.ax.tick_params(axis='y',labelcolor = self.color)
-
-        #self.ax2 = self.ax.twinx()  # instantiate a second axes that shares the same x-axis
-        #self.color = 'tab:blue'
-        #self.ax2.set_ylabel('Total Structual Displacment(mm)', color = self.color, fontsize=20)  # we already handled the x-label with ax1
-        #self.ax2.plot(self.Structure_total_displacment, color = self.color, linewidth = 3.0)
-        #self.ax2.yaxis.tick_right()
-        #self.ax2.yaxis.set_label_position("right")
-        #self.ax2.tick_params(axis='y',labelcolor = self.color)
-
-        #self.ax3 = self.ax.twinx()
-        #self.ax3.spines.right.set_position(("outward",60))
-        #self.make_patch_spines_invisible(self.ax3)
-        #self.ax3.spines["right"].set_visible(True)
-        #self.ax3.semilogy(self.Peak_displacment, color = "Green", linewidth = 3.0)
-        #self.ax3.set_ylabel('Maximum Structual Displacment(mm)', color = 'Green', fontsize=20)
-        #self.ax3.tick_params(axis='y',labelcolor = 'Green')
-        #plt.title("Optmisation of NACA 2412 for 5 degree AoA at Re = 1e5")
-        #plt.show()
-
-
-        #self.Truss_Analysis(self.working_lattice)
-        #self.fig = plt.figure()
-        #self.ax = self.fig.add_subplot(111)
-        #self.Displacement_points = self.all_points+self.U*100
-        #self.original_memberlengths = self.all_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
-        #self.original_s_length = np.sum(np.sqrt((self.original_memberlengths**2).sum(axis=1)))
-        #self.displaced_memberlengths = self.Displacement_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
-        #self.displaced_s_length = np.sqrt((self.displaced_memberlengths**2).sum(axis=1))
-        #self.Strain = self.displaced_s_length-self.original_s_length
-        #self.min_strain = np.min(self.Strain)
-        #self.max_strain = np.max(self.Strain)
-        #self.strain_range = self.max_strain-self.min_strain
-        #self.cmap = plt.cm.get_cmap('turbo')
-        #for i, point in enumerate(self.Displacement_points):
-        #    print(i, point)
-        #    self.ax.annotate(str(i), (int(point[0]), int(point[1])))
-        ##plt.scatter(self.point[0], self.point[1], 10, c = 'r')
-        ##self.ax.annotate(index, (self.point[0], self.point[1]))
-        #for i, connection in enumerate(self.filtered_connections):
-        #    self.index_strain = self.Strain[i]
-        #    self.colour_encoding = (self.index_strain-self.min_strain)/self.strain_range
-        #    self.colour = self.cmap(self.colour_encoding)
-        #    self.start_location  = self.Displacement_points[int(connection[0])]
-        #    self.end_location  = self.Displacement_points[int(connection[1])]
-        #    self.ax.plot(self.start_location[0],self.start_location[1])
-        #    self.ax.plot(self.end_location[0],self.end_location[1])
-        #    self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]],c = self.colour)
-        #    self.ax.add_line(self.line)
-        ##for connection in self.filtered_connections:
-        ##    self.start_location  = self.all_points[int(connection[0])]
-        ##    self.end_location  = self.all_points[int(connection[1])]
-        ##    self.ax.plot(self.start_location[0],self.start_location[1])
-        ##    self.ax.plot(self.end_location[0],self.end_location[1])
-        ##    self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]], c='blue')
-        ##    self.ax.add_line(self.line)
-        #plt.title("Deformed Airfoil shape(x100), NACA 2412, 5 Degrees, 20 ms^-1")
-        #plt.gca().set_aspect('equal')
-        #plt.show()
-
+        self.ax3 = self.ax.twinx()
+        self.ax3.spines.right.set_position(("outward",60))
+        self.make_patch_spines_invisible(self.ax3)
+        self.ax3.spines["right"].set_visible(True)
+        self.ax3.semilogy(self.Peak_displacment, color = "Green", linewidth = 3.0)
+        self.ax3.set_ylabel('Maximum Structual Displacment(mm)', color = 'Green', fontsize=20)
+        self.ax3.tick_params(axis='y',labelcolor = 'Green')
+        plt.title("Optmisation of NACA "+str(self.foil_number)+" for "+str(self.Angle_of_Attack)+" degree AoA at Re = "+str(self.Reynolds))
+        plt.savefig('C:\\Users\\rollo\\Documents\\GitHub\\Generative-Slicer\\Optmisation of NACA 2412 for 5 degree AoA.png', dpi = 400)
+        plt.show()
 
     def make_patch_spines_invisible(self, ax):
         ax.set_frame_on(True)
@@ -821,7 +794,7 @@ class main():
         self.NN = len(self.all_points)          #Number of nodes
         self.NDOF = self.DOF*self.NN            #Total number of degree of freedom
         self.Truss_Analysis(self.filtered_connections)
-        self.Displacement_points = self.all_points+self.U*1000
+        self.Displacement_points = self.all_points+self.U*self.Deformation_Amplifaction_factor
         self.original_memberlengths = self.all_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
         self.original_s_length = np.sum(np.sqrt((self.original_memberlengths**2).sum(axis=1)))
         self.displaced_memberlengths = self.Displacement_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
@@ -869,78 +842,6 @@ class main():
             plt.pause(5)
             plt.close()
 
-
-        '''Plotting Stuff'''
-        #self.fig,self.ax = plt.subplots()
-        #plt.grid()
-        #self.color = 'tab:red'
-        #self.ax.set_ylim(0,1.1)
-        #self.ax.plot(np.array(self.Structure_Mass), color = self.color, linewidth = 3.0)
-        #self.ax.set_xlabel("Iterations", fontsize=20)
-        #self.ax.set_ylabel("Volume Fraction (%)", color = self.color, fontsize=20)
-        #self.ax.tick_params(axis='y',labelcolor = self.color)
-
-        #self.ax2 = self.ax.twinx()  # instantiate a second axes that shares the same x-axis
-        #self.color = 'tab:blue'
-        #self.ax2.set_ylabel('Total Structual Displacment(mm)', color = self.color, fontsize=20)  # we already handled the x-label with ax1
-        #self.ax2.plot(self.Structure_total_displacment, color = self.color, linewidth = 3.0)
-        #self.ax2.yaxis.tick_right()
-        #self.ax2.yaxis.set_label_position("right")
-        #self.ax2.tick_params(axis='y',labelcolor = self.color)
-
-        #self.ax3 = self.ax.twinx()
-        #self.ax3.spines.right.set_position(("outward",60))
-        #self.make_patch_spines_invisible(self.ax3)
-        #self.ax3.spines["right"].set_visible(True)
-        #self.ax3.semilogy(self.Peak_displacment, color = "Green", linewidth = 3.0)
-        #self.ax3.set_ylabel('Maximum Structual Displacment(mm)', color = 'Green', fontsize=20)
-        #self.ax3.tick_params(axis='y',labelcolor = 'Green')
-        #plt.title("Optmisation of NACA 2412 for 5 degree AoA at Re = 1e5")
-        #plt.show()
-
-
-        #self.Truss_Analysis(self.working_lattice)
-        #self.fig = plt.figure()
-        #self.ax = self.fig.add_subplot(111)
-        #self.Displacement_points = self.all_points+self.U*100
-        #self.original_memberlengths = self.all_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
-        #self.original_s_length = np.sum(np.sqrt((self.original_memberlengths**2).sum(axis=1)))
-        #self.displaced_memberlengths = self.Displacement_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
-        #self.displaced_s_length = np.sqrt((self.displaced_memberlengths**2).sum(axis=1))
-        #self.Strain = self.displaced_s_length-self.original_s_length
-        #self.min_strain = np.min(self.Strain)
-        #self.max_strain = np.max(self.Strain)
-        #self.strain_range = self.max_strain-self.min_strain
-        #self.cmap = plt.cm.get_cmap('turbo')
-        #for i, point in enumerate(self.Displacement_points):
-        #    print(i, point)
-        #    self.ax.annotate(str(i), (int(point[0]), int(point[1])))
-        ##plt.scatter(self.point[0], self.point[1], 10, c = 'r')
-        ##self.ax.annotate(index, (self.point[0], self.point[1]))
-        #for i, connection in enumerate(self.filtered_connections):
-        #    self.index_strain = self.Strain[i]
-        #    self.colour_encoding = (self.index_strain-self.min_strain)/self.strain_range
-        #    self.colour = self.cmap(self.colour_encoding)
-        #    self.start_location  = self.Displacement_points[int(connection[0])]
-        #    self.end_location  = self.Displacement_points[int(connection[1])]
-        #    self.ax.plot(self.start_location[0],self.start_location[1])
-        #    self.ax.plot(self.end_location[0],self.end_location[1])
-        #    self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]],c = self.colour)
-        #    self.ax.add_line(self.line)
-        ##for connection in self.filtered_connections:
-        ##    self.start_location  = self.all_points[int(connection[0])]
-        ##    self.end_location  = self.all_points[int(connection[1])]
-        ##    self.ax.plot(self.start_location[0],self.start_location[1])
-        ##    self.ax.plot(self.end_location[0],self.end_location[1])
-        ##    self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]], c='blue')
-        ##    self.ax.add_line(self.line)
-        #plt.title("Deformed Airfoil shape(x100), NACA 2412, 5 Degrees, 20 ms^-1")
-        #plt.gca().set_aspect('equal')
-        #plt.show()
-
-
-
-
     def Fast_Optimisation(self):
         '''Not all members can be removed, we must find the array of memebers that we can remove with out the k-matrix becoming singular'''
         '''Weve now found this array, we can now go throught this list and find which of there contained members carries the least stress'''
@@ -971,7 +872,7 @@ class main():
         self.NN = len(self.all_points)          #Number of nodes
         self.NDOF = self.DOF*self.NN            #Total number of degree of freedom
         self.Truss_Analysis(self.filtered_connections)
-        self.Displacement_points = self.all_points+self.U*1000
+        self.Displacement_points = self.all_points+self.U*self.Deformation_Amplifaction_factor
         self.original_memberlengths = self.all_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
         self.original_s_length = np.sum(np.sqrt((self.original_memberlengths**2).sum(axis=1)))
         self.displaced_memberlengths = self.Displacement_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
@@ -1033,7 +934,7 @@ class main():
 
             self.fig = plt.figure()
             self.ax = self.fig.add_subplot(111)
-            self.Displacement_points = self.all_points+self.U*20
+            self.Displacement_points = self.all_points+self.U*self.Deformation_Amplifaction_factor
             for i, connection in enumerate(self.working_lattice):
                 self.index_strain = self.Strain[i]
                 self.colour_encoding = (self.index_strain-self.min_strain)/self.strain_range
@@ -1044,7 +945,7 @@ class main():
                 self.ax.plot(self.end_location[0],self.end_location[1])
                 self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]],c = self.colour)
                 self.ax.add_line(self.line)
-            plt.title("Deformed Airfoil shape(x100), NACA 2412, 5 Degrees, 20 ms^-1")
+            plt.title("Deformed Airfoil shape(x"+str(self.Deformation_Amplifaction_factor)+"), NACA"+str(self.foil_num)+", "+str(self.Angle_of_Attack)+" Degrees, "+str(self.Flow_Velocity)+" ms^-1")
             plt.gca().set_aspect('equal')
             #plt.show()
             plt.savefig('C:\\Users\\rollo\\Documents\\GitHub\\Generative-Slicer\\Optimisation video\\'+str(self.frame_number)+'.png', dpi = 300)
@@ -1081,7 +982,7 @@ class main():
             self.NN = len(self.all_points)          #Number of nodes
             self.NDOF = self.DOF*self.NN            #Total number of degree of freedom
             self.Truss_Analysis(self.filtered_connections)
-            self.Displacement_points = self.all_points+self.U*1000
+            self.Displacement_points = self.all_points+self.U*self.Deformation_Amplifaction_factor
             self.original_memberlengths = self.all_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
             self.original_s_length = np.sum(np.sqrt((self.original_memberlengths**2).sum(axis=1)))
             self.displaced_memberlengths = self.Displacement_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
@@ -1132,7 +1033,7 @@ class main():
             self.NN = len(self.all_points)          #Number of nodes
             self.NDOF = self.DOF*self.NN            #Total number of degree of freedom
             self.Truss_Analysis(self.filtered_connections)
-            self.Displacement_points = self.all_points+self.U*1000
+            self.Displacement_points = self.all_points+self.U*self.Deformation_Amplifaction_factor
             self.original_memberlengths = self.all_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
             self.original_s_length = np.sum(np.sqrt((self.original_memberlengths**2).sum(axis=1)))
             self.displaced_memberlengths = self.Displacement_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
@@ -1153,13 +1054,31 @@ class main():
         self.ax.set_ylabel("Optimised Mass")
         plt.title("Angle Optimisation")
         plt.show()
-    def Find_Print_Path(self):
+    def Find_Print_Path(self, members):
         '''To print this part we must produce a tool path for the printer to follow. THIS(needless to say) is going to be a living hell'''
         '''this takes in a set of nodes, and how they are linked, we must then reorder this list of connections to find a time efficient path'''
-        pass
+        self.Print_Graph = nx.DiGraph()
+        for connection in members:
+            self.Print_Graph.add_edge(connection[0], connection[1])
+        if nx.is_eulerian(self.Print_Graph):
+            print("the path is eulerian")
+            self.path = list(nx.eulerian_circuit(self.Print_Graph))
+        else:
+            print("Bugger")
+    def Make_Print_Path(self, verticies, edges):
+        for edge in edges:
+            self.member_length = edge[1] - edge[0]
+            self.e = self.member_length*0.04
+            self.command = "G1 E"+str(self.e)+" X"+str(x)+" Y"+str(y)+" Z"+str(z)+"\r\n"
+
 
     def mainloop(self):
+        self.start_time = time.time()
         self.Single_Run()
+        print("Time to Complete: ")
+        print(time.time() - self.start_time)
+        #self.Find_Print_Path(self.output_lattice)
+
         #self.Fast_Optimisation()
         #self.Mesh_Angle_Study()
 
