@@ -13,8 +13,15 @@ from scipy import sparse
 import numpy as np
 from shapely.geometry import Point, LineString, Polygon
 import cupy as cy
+import sys
+from scipy.sparse import csc_matrix
 from scipy.sparse.linalg import spsolve
 import networkx as nx
+from matplotlib import cm
+
+'''Shiver me timbers'''
+sys.setrecursionlimit(10000) #always a bit worrying when you have to pull this one out
+
 
 class Printer():
     def __init__(self):
@@ -100,11 +107,11 @@ class Printer():
 
 class main():
     def __init__(self):
-        self.grid_resolution = 10#mm
+        self.grid_resolution = 18#mm
         self.Flow_Velocity = 50
         self.Angle_of_Attack = 5
         self.foil_number = '2412'
-        self.DOF = 3                  #2D Truss
+        self.DOF = 3                  #2D Truss X,Y,M this is the number of degrees of freedom per node
         self.E = 4.107e9
         self.A = 4e-6
         self.G = 0.35e5
@@ -112,6 +119,7 @@ class main():
         self.Flextural_Strain_limit = 0.017
         self.Deformation_Amplifaction_factor = 100
         self.Reynolds = 1e5#(1.225*self.Flow_Velocity*0.3)/1.81e-5
+        self.Saftey_factor = 3
         self.mainloop()
     def resample(self, surface_,  samples):
         '''resamples the foil at a higher density'''
@@ -229,7 +237,7 @@ class main():
         self.mesh_points = self.generate_isometric_triangular_grid(self.mid_x+self.range,self.mid_x-self.range,self.mid_y+self.range,self.mid_y-self.range)
 
 
-        self.mesh_points = np.array([self.mid_point+np.dot((point - self.mid_point),np.array([[np.cos(angle), np.sin(angle)],[-np.sin(angle),np.cos(angle)]])) for point in self.mesh_points ])
+        self.mesh_points = np.array([self.mid_point+np.dot((point - self.mid_point),np.array([[np.cos(np.radians(angle)), np.sin(np.radians(angle))],[-np.sin(np.radians(angle)),np.cos(np.radians(angle))]])) for point in self.mesh_points ])
 
         if Verbose:
             plt.scatter(self.mesh_points[:,0],self.mesh_points[:,1])
@@ -345,19 +353,21 @@ class main():
         #        self.filtered_connections = np.vstack((self.filtered_connections, connection))
         #print(len(self.filtered_connections), " Connections")
 
-        if Verbose:
-            self.fig = plt.figure()
-            self.ax = self.fig.add_subplot(111)
-            for connection in self.filtered_connections:
-                self.start_location  = self.all_points[int(connection[0])]
-                self.end_location  = self.all_points[int(connection[1])]
-                self.ax.plot(self.start_location[0],self.start_location[1])
-                self.ax.plot(self.end_location[0],self.end_location[1])
-                self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]])
-                self.ax.add_line(self.line)
-            plt.title("NACA 2412 with "+str(self.grid_resolution)+"mm Lattice infill")
-            plt.gca().set_aspect('equal')
-            plt.show()
+        #if Verbose:
+        self.fig = plt.figure()
+        self.ax = self.fig.add_subplot(111)
+        for connection in self.filtered_connections:
+            self.start_location  = self.all_points[int(connection[0])]
+            self.end_location  = self.all_points[int(connection[1])]
+            self.ax.plot(self.start_location[0],self.start_location[1])
+            self.ax.plot(self.end_location[0],self.end_location[1])
+            self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]])
+            self.ax.add_line(self.line)
+        plt.title("NACA 2412 with "+str(self.grid_resolution)+"mm Lattice infill")
+        plt.gca().set_aspect('equal')
+        plt.savefig('C:\\Users\\rollo\\Documents\\GitHub\\Generative-Slicer\\Optimisation video\\'+"NACA 2412 with "+str(self.grid_resolution)+"mm Lattice infill angle"+str(angle)+'.png', dpi = 400)
+        plt.close()
+        #plt.show()
         self.filtered_connections = self.filtered_connections.astype(int)
         #return [self.filtered_connections, self.all_points, self.bounding_polygon_indecies, self.convex_points_indecies, self.hole_node_indecies]
 
@@ -398,7 +408,7 @@ class main():
         for i in range(1,len(self.link_Force)-1):
             self.node_loads.append((self.vector_link_Force[i])+(self.vector_link_Force[i+1]))
         self.node_loads.append(self.vector_link_Force[-1])
-        return self.node_loads
+        return self.node_loads*self.Saftey_factor
 
     def Truss_Analysis(self, connections, i=0):
         '''This thing works, dont touch it, its basicly black magic'''
@@ -433,7 +443,9 @@ class main():
             '''The Matrix determinant is zero so it is singular'''
             return np.NaN
         else:
-            self.Uf = np.linalg.solve(self.Kff,self.Pf)
+            #self.sparsity = 1.0 - np.count_nonzero(self.Kff) / self.Kff.size
+            #print(self.sparsity)
+            self.Uf = spsolve(csc_matrix(self.Kff), self.Pf)
         self.U = self.DOFCON.astype(float).flatten()
         self.U[self.freeDOF] = self.Uf
         self.U[self.supportDOF] = self.Ur
@@ -442,24 +454,6 @@ class main():
         self.new_d = self.Displacement_points[connections[:,1],:] - self.Displacement_points[connections[:,0],:]
         self.new_length = np.sqrt(np.square(self.new_d).sum(axis=1))
         self.d_length = (self.length-self.new_length)/self.length
-
-
-        #self.fig = plt.figure()
-        #self.ax = self.fig.add_subplot(111)
-        #self.Displacement_points = self.all_points+self.U*1000
-        #for i, connection in enumerate(connections):
-        #    self.start_location  = self.Displacement_points[int(connection[0])]
-        #    self.end_location  = self.Displacement_points[int(connection[1])]
-        #    self.ax.plot(self.start_location[0],self.start_location[1])
-        #    self.ax.plot(self.end_location[0],self.end_location[1])
-        #    self.line = Line2D([self.start_location[0],self.end_location[0]],[self.start_location[1],self.end_location[1]])
-        #    self.ax.add_line(self.line)
-        #plt.title("Deformed Airfoil shape(x1000), NACA 2412, 5 Degrees, 20 ms^-1")
-        #plt.gca().set_aspect('equal')
-        #print(i)
-        #plt.savefig('C:\\Users\\rollo\\Documents\\GitHub\\Generative-Slicer\\Optimisation video\\'+str(self.frame_number)+"_"+str(i)+'.png', dpi = 100)
-        #plt.close()
-
         return np.sum(np.abs(self.d_length))#*np.sum(self.nw_length)#+np.max(np.abs(self.d_length))
 
         #return self.U, self.d_length
@@ -508,17 +502,6 @@ class main():
             if self.valid_changes == []:
                 self.output_lattice = self.working_lattice
                 break
-
-            #'''Removing elements of minimum strain'''
-            #self.index_minimum_strain = np.nanargsort(self.Strain)
-
-
-
-
-
-
-
-
 
             self.costs = []
             self.indexes = []
@@ -616,6 +599,8 @@ class main():
         '''Not all members can be removed, we must find the array of memebers that we can remove with out the k-matrix becoming singular'''
         '''Weve now found this array, we can now go throught this list and find which of there contained members carries the least stress'''
         self.current_connections = self.filtered_connections
+        print("Number of mesh elements")
+        print(len(self.current_connections))
         self.halt = False
         self.Structure_Mass = []
         self.Structure_total_displacment = []
@@ -665,7 +650,8 @@ class main():
             self.index_min_cost = np.nanargmin(self.costs)
             self.cost = self.costs[self.index_min_cost]
             self.Truss_Analysis(self.mesh_options[self.index_min_cost])
-            if np.max(np.abs(self.d_length)) >self.Flextural_Strain_limit:
+            if (np.max(np.abs(self.d_length)) >self.Flextural_Strain_limit) or (np.sum(np.abs(self.d_length))>10) or (np.max(np.abs(self.U))>1):
+                print((np.max(np.abs(self.d_length)) >self.Flextural_Strain_limit),(np.sum(np.abs(self.d_length))>10),(np.max(np.abs(self.U))>1))
                 self.output_lattice = self.working_lattice
                 self.halt = True
             else:
@@ -690,8 +676,7 @@ class main():
             plt.gca().set_aspect('equal')
             plt.savefig('C:\\Users\\rollo\\Documents\\GitHub\\Generative-Slicer\\Optimisation video\\'+str(self.frame_number)+'.png', dpi = 100)
             plt.close()
-        print("Optimised Mass ratio")
-        print(self.total_length/self.original_total_length)
+
         '''Plotting Stuff'''
 
         '''Floppy Member removal'''
@@ -732,33 +717,38 @@ class main():
             #plt.show()
             plt.savefig('C:\\Users\\rollo\\Documents\\GitHub\\Generative-Slicer\\Optimisation video\\'+str(self.frame_number)+'.png', dpi = 200)
             plt.close()
-        self.fig,self.ax = plt.subplots()
-        plt.grid()
-        self.color = 'tab:red'
-        self.ax.set_ylim(0,1.1)
-        self.ax.plot(np.array(self.Structure_Mass), color = self.color, linewidth = 3.0)
-        self.ax.set_xlabel("Iterations", fontsize=20)
-        self.ax.set_ylabel("Volume Fraction (%)", color = self.color, fontsize=20)
-        self.ax.tick_params(axis='y',labelcolor = self.color)
+        self.memberlengths = self.all_points[self.output_lattice[:,1],:] - self.all_points[self.output_lattice[:,0],:]
+        self.total_length = np.sum(np.sqrt((self.memberlengths**2).sum(axis=1)))
+        print("Optimised Mass ratio")
+        print(self.total_length/self.original_total_length)
 
-        self.ax2 = self.ax.twinx()  # instantiate a second axes that shares the same x-axis
-        self.color = 'tab:blue'
-        self.ax2.set_ylabel('Total Structual Displacment(mm)', color = self.color, fontsize=20)  # we already handled the x-label with ax1
-        self.ax2.plot(self.Structure_total_displacment, color = self.color, linewidth = 3.0)
-        self.ax2.yaxis.tick_right()
-        self.ax2.yaxis.set_label_position("right")
-        self.ax2.tick_params(axis='y',labelcolor = self.color)
+        #self.fig,self.ax = plt.subplots()
+        #plt.grid()
+        #self.color = 'tab:red'
+        #self.ax.set_ylim(0,1.1)
+        #self.ax.plot(np.array(self.Structure_Mass), color = self.color, linewidth = 3.0)
+        #self.ax.set_xlabel("Iterations", fontsize=20)
+        #self.ax.set_ylabel("Volume Fraction (%)", color = self.color, fontsize=20)
+        #self.ax.tick_params(axis='y',labelcolor = self.color)
 
-        self.ax3 = self.ax.twinx()
-        self.ax3.spines.right.set_position(("outward",60))
-        self.make_patch_spines_invisible(self.ax3)
-        self.ax3.spines["right"].set_visible(True)
-        self.ax3.semilogy(self.Peak_displacment, color = "Green", linewidth = 3.0)
-        self.ax3.set_ylabel('Maximum Structual Displacment(mm)', color = 'Green', fontsize=20)
-        self.ax3.tick_params(axis='y',labelcolor = 'Green')
-        plt.title("Optmisation of NACA "+str(self.foil_number)+" for "+str(self.Angle_of_Attack)+" degree AoA at Re = "+str(self.Reynolds))
-        plt.savefig('C:\\Users\\rollo\\Documents\\GitHub\\Generative-Slicer\\Optmisation of NACA 2412 for 5 degree AoA.png', dpi = 400)
-        plt.show()
+        #self.ax2 = self.ax.twinx()  # instantiate a second axes that shares the same x-axis
+        #self.color = 'tab:blue'
+        #self.ax2.set_ylabel('Total Structual Displacment(mm)', color = self.color, fontsize=20)  # we already handled the x-label with ax1
+        #self.ax2.plot(self.Structure_total_displacment, color = self.color, linewidth = 3.0)
+        #self.ax2.yaxis.tick_right()
+        #self.ax2.yaxis.set_label_position("right")
+        #self.ax2.tick_params(axis='y',labelcolor = self.color)
+
+        #self.ax3 = self.ax.twinx()
+        #self.ax3.spines.right.set_position(("outward",60))
+        #self.make_patch_spines_invisible(self.ax3)
+        #self.ax3.spines["right"].set_visible(True)
+        #self.ax3.semilogy(self.Peak_displacment, color = "Green", linewidth = 3.0)
+        #self.ax3.set_ylabel('Maximum Structual Displacment(mm)', color = 'Green', fontsize=20)
+        #self.ax3.tick_params(axis='y',labelcolor = 'Green')
+        #plt.title("Optmisation of NACA "+str(self.foil_number)+" for "+str(self.Angle_of_Attack)+" degree AoA at Re = "+str(self.Reynolds))
+        #plt.savefig('C:\\Users\\rollo\\Documents\\GitHub\\Generative-Slicer\\Optmisation of NACA 2412 for 5 degree AoA.png', dpi = 400)
+        #plt.show()
 
     def make_patch_spines_invisible(self, ax):
         ax.set_frame_on(True)
@@ -774,7 +764,7 @@ class main():
         self.three_quater_chord = self.find_chamber_point(0.6, self.foil)
         self.Layer = self.Mesh_layer(self.foil*300,np.array([
                                                             np.array([[ self.third_chord[0]*300+10*np.cos(theta), self.third_chord[1]*300+10*np.sin(theta)] for theta in np.linspace(0, 2*np.pi,20)])[:-1],
-                                                            np.array([[ self.three_quater_chord[0]*300+5*np.cos(theta), self.three_quater_chord[1]*300+5*np.sin(theta)] for theta in np.linspace(0, 2*np.pi,20)])[:-1]]))
+                                                            np.array([[ self.three_quater_chord[0]*300+5*np.cos(theta), self.three_quater_chord[1]*300+5*np.sin(theta)] for theta in np.linspace(0, 2*np.pi,20)])[:-1]]), angle = 0)
         self.all_points = self.all_points.astype(np.float64)
         self.forces = self.Generate_loading_data(self.foil, 0.002)
         '''Pre-processing as much as possible'''
@@ -805,6 +795,10 @@ class main():
         self.strain_range = self.max_strain-self.min_strain
         self.cmap = plt.cm.get_cmap('turbo')
         self.Optimise(False)
+        print("Grid Resolution: ",self.grid_resolution,"mm")
+        print("Inital Mesh elements: ", len(self.filtered_connections))
+
+
         '''Live Plotting'''
         if False:
             '''Process Logging'''
@@ -956,7 +950,7 @@ class main():
         self.third_chord = self.find_chamber_point(0.3, self.foil)
         self.three_quater_chord = self.find_chamber_point(0.6, self.foil)
         self.optimised_mass = []
-        self.resolutions = [5,8,10,12,14,18]
+        self.resolutions = [8,10,12,14,18]
         self.theta = 0
         for self.res in tqdm(self.resolutions):
             self.grid_resolution = self.res
@@ -1004,12 +998,84 @@ class main():
         plt.title("Angle Optimisation")
         plt.show()
 
+    def AoA_study(self):
+        pass
+
+    def Compound_Study(self):
+
+        self.optimised_mass = []
+        self.angles = [theta for theta in range(0,80,20)]
+        self.mesh_resolutions = [8,12,18]
+        self.angles, self.resolutions = np.meshgrid(self.angles, self.mesh_resolutions)
+
+        for i in tqdm(range(len(self.angles))):
+            self.theta  = self.angles[0,i]
+            self.grid_resolution = self.resolutions[0,i]
+            print("\n"*5)
+            print("Run params")
+            print("Grid angle: ",self.theta," Grid Resolution: ",self.grid_resolution)
+            self.foil = self.gen_naca(self.foil_number)
+            self.third_chord = self.find_chamber_point(0.3, self.foil)
+            self.three_quater_chord = self.find_chamber_point(0.6, self.foil)
+            self.Layer = self.Mesh_layer(self.foil*300,np.array([
+                                                                np.array([[ self.third_chord[0]*300+10*np.cos(theta), self.third_chord[1]*300+10*np.sin(theta)] for theta in np.linspace(0, 2*np.pi,20)])[:-1],
+                                                                np.array([[ self.three_quater_chord[0]*300+5*np.cos(theta), self.three_quater_chord[1]*300+5*np.sin(theta)] for theta in np.linspace(0, 2*np.pi,20)])[:-1]]), angle = self.theta)
+            self.all_points = self.all_points.astype(np.float64)
+            self.forces = self.Generate_loading_data(self.foil, 0.002)
+            '''Pre-processing as much as possible'''
+            self.DOFCON = np.ones((self.all_points.shape[0],self.DOF)).astype(int)
+            self.Ur = []
+            self.Forces = np.zeros((self.all_points.shape[0],self.DOF))
+            for index in range(self.bounding_polygon_indecies[0], self.bounding_polygon_indecies[1]+1):
+                self.Forces[index,0:2] = self.forces[index-self.bounding_polygon_indecies[1]]
+            for indexs in self.hole_node_indecies:
+                for i in range(indexs[0], indexs[1]+1):
+                    self.DOFCON[i,:] = 0
+                    self.Ur.append(0)
+                    self.Ur.append(0)
+                    self.Ur.append(0)
+            self.freeDOF = self.DOFCON.flatten().nonzero()[0]
+            self.Pf = self.Forces.flatten()[self.freeDOF]
+            self.NN = len(self.all_points)          #Number of nodes
+            self.NDOF = self.DOF*self.NN            #Total number of degree of freedom
+            self.Truss_Analysis(self.filtered_connections)
+            self.Displacement_points = self.all_points+self.U*self.Deformation_Amplifaction_factor
+            self.original_memberlengths = self.all_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
+            self.original_s_length = np.sum(np.sqrt((self.original_memberlengths**2).sum(axis=1)))
+            self.displaced_memberlengths = self.Displacement_points[self.filtered_connections[:,1],:] - self.all_points[self.filtered_connections[:,0],:]
+            self.displaced_s_length = np.sqrt((self.displaced_memberlengths**2).sum(axis=1))
+            self.Strain = self.displaced_s_length-self.original_s_length
+            self.min_strain = np.min(self.Strain)
+            self.max_strain = np.max(self.Strain)
+            self.strain_range = self.max_strain-self.min_strain
+            self.cmap = plt.cm.get_cmap('turbo')
+            self.Optimise(False)
+            self.optimised_mass.append(self.Structure_Mass[-1])
+            print("Run Solution")
+            print(self.theta, self.grid_resolution, self.optimised_mass)
+        print(self.angles)
+        print(self.resolutions)
+        print(self.optimised_mass)
+
+        self.fig = plt.figure()
+        self.ax = self.fig.add_subplot(111, projection='3d')
+        self.surface = self.ax.plot_surface(self.angles, self.resolutions, self.optimised_mass)
+        self.fig.colorbar(self.surface, shrink=0.5, aspect=5)
+        plt.title("Mesh Hyperparameter varience ")
+        self.ax.set_xlabel('Offset angle')
+        self.ax.set_ylabel('Grid Resolution')
+        self.ax.set_zlabel('Optimised Mass Ratio')
+        plt.show()
+        print(self.optimised_mass)
+
     def Mesh_Angle_Study(self):
         self.foil = self.gen_naca(self.foil_number)
         self.third_chord = self.find_chamber_point(0.3, self.foil)
         self.three_quater_chord = self.find_chamber_point(0.6, self.foil)
         self.optimised_mass = []
-        self.angles = [theta for theta in range(0,60,10)]
+        self.angles = [theta for theta in range(0,80,20)]
+        print("Grid Resolution", self.grid_resolution)
+        print("Angles: ", self.angles)
         for self.theta in tqdm(self.angles):
             self.Layer = self.Mesh_layer(self.foil*300,np.array([
                                                                 np.array([[ self.third_chord[0]*300+10*np.cos(theta), self.third_chord[1]*300+10*np.sin(theta)] for theta in np.linspace(0, 2*np.pi,20)])[:-1],
@@ -1046,7 +1112,10 @@ class main():
             self.Optimise(False)
             self.optimised_mass.append(self.Structure_Mass[-1])
             print(self.optimised_mass)
-        print(self.optimised_mass)
+
+        print("Grid Resolution", self.grid_resolution)
+        print("Angles: ", self.angles)
+        print("Optimsied Mass: ",self.optimised_mass)
         self.fig,self.ax = plt.subplots()
         plt.grid()
         self.ax.plot(self.angles, self.optimised_mass)
@@ -1054,17 +1123,44 @@ class main():
         self.ax.set_ylabel("Optimised Mass")
         plt.title("Angle Optimisation")
         plt.show()
+        print(self.optimised_mass)
+
+    def traverse_edges(self, graph):
+        visited_edges = set()
+        def dfs(node):
+            nonlocal visited_edges
+            for neighbor in graph.neighbors(node):
+                edge = (node, neighbor)
+                if edge not in visited_edges:
+                    print(f"Traversing edge: {edge}")
+                    visited_edges.add(edge)
+                    dfs(neighbor)
+
+        for node in graph.nodes:
+            dfs(node)
+        return visited_edges
+
     def Find_Print_Path(self, members):
+
         '''To print this part we must produce a tool path for the printer to follow. THIS(needless to say) is going to be a living hell'''
         '''this takes in a set of nodes, and how they are linked, we must then reorder this list of connections to find a time efficient path'''
         self.Print_Graph = nx.DiGraph()
+        self.path = []
         for connection in members:
             self.Print_Graph.add_edge(connection[0], connection[1])
         if nx.is_eulerian(self.Print_Graph):
             print("the path is eulerian")
             self.path = list(nx.eulerian_circuit(self.Print_Graph))
+            return self.path
         else:
-            print("Bugger")
+            print("This network does not contain an Eulerian path")
+            self.path = self.traverse_edges(self.Print_Graph)
+            for i_path in self.path:
+                print(i_path)
+            '''Start with borders'''
+
+
+
     def Make_Print_Path(self, verticies, edges):
         for edge in edges:
             self.member_length = edge[1] - edge[0]
@@ -1077,10 +1173,13 @@ class main():
         self.Single_Run()
         print("Time to Complete: ")
         print(time.time() - self.start_time)
-        #self.Find_Print_Path(self.output_lattice)
+        self.Find_Print_Path(self.output_lattice)
 
+        #self.Make_Print_Path()
         #self.Fast_Optimisation()
+        #self.Compound_Study()
         #self.Mesh_Angle_Study()
+        #self.Mesh_Resolution_Study()
 
 
 
